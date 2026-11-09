@@ -1,7 +1,8 @@
+import { sampleSizeRule } from '../../utils/sampleSize';
 import React, { useState } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { useLanguage } from '../../context/LanguageContext';
-import { ChartType } from '../../types/DataTypes';
+import { ChartType, RuleSet } from '../../types/DataTypes';
 import ChartTypeInfo from './ChartTypeInfo';
 import MultipleSelector, { Option } from '../ui/multiselect';
 
@@ -26,6 +27,8 @@ const ControlPanel: React.FC = () => {
   const [customizationOpen, setCustomizationOpen] = useState(false);
   const isXbarChart = selectedChartType === 'xBarS' || selectedChartType === 'xBarR';
   const usesDenominator = selectedChartType === 'pChart' || selectedChartType === 'uChart';
+  const usesSampleSize = isXbarChart || selectedChartType === 'npChart' || (usesDenominator && !denominatorColumn);
+  const sizeRule = sampleSizeRule(selectedChartType);
   const effectiveSampleSize = isXbarChart && selectedColumns.length > 1
     ? selectedColumns.length
     : sampleSize;
@@ -42,7 +45,7 @@ const ControlPanel: React.FC = () => {
   const chartTypes: { value: ChartType; label: string }[] = [
     { value: 'individual', label: 'Individual (I) Chart' },
     { value: 'pChart', label: 'P Chart (Proportion)' },
-    { value: 'npChart', label: 'NP Chart (Number of Defects)' },
+    { value: 'npChart', label: 'NP Chart (Nonconforming Units)' },
     { value: 'cChart', label: 'C Chart (Defects)' },
     { value: 'uChart', label: 'U Chart (Defects per Unit)' },
     { value: 'xBarS', label: 'X-bar S Chart' },
@@ -63,7 +66,7 @@ const ControlPanel: React.FC = () => {
         </label>
         <select
           id="chart-type"
-          className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+          className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500"
           value={selectedChartType}
           onChange={(e) => setSelectedChartType(e.target.value as ChartType)}
           disabled={!isDataLoaded}
@@ -76,6 +79,24 @@ const ControlPanel: React.FC = () => {
         </select>
       </div>
 
+          <div className="mb-4">
+            <label htmlFor="rule-set" className="block text-sm font-medium text-gray-700 mb-1">
+              {t('rules.set.selector')}
+            </label>
+            <select
+              id="rule-set"
+              className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500"
+              value={chartOptions.ruleSet ?? 'nelson'}
+              onChange={(e) => setChartOptions({ ...chartOptions, ruleSet: e.target.value as RuleSet })}
+              disabled={!isDataLoaded}
+              aria-describedby="rule-set-hint"
+            >
+              <option value="nelson">{t('rules.set.nelson')}</option>
+              <option value="westernElectric">{t('rules.set.westernElectric')}</option>
+            </select>
+            <p id="rule-set-hint" className="text-xs text-gray-600 mt-1">{t('rules.set.selectorHint')}</p>
+          </div>
+
       {/* Data configuration */}
       {rawData && rawData.headers.length > 0 && (
         <div className="space-y-4 mb-4">
@@ -85,7 +106,7 @@ const ControlPanel: React.FC = () => {
             </label>
             <select
               id="x-axis-column"
-              className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500"
               value={xAxisColumn || ''}
               onChange={(e) => {
                 const x = e.target.value;
@@ -123,30 +144,32 @@ const ControlPanel: React.FC = () => {
             </p>
           </div>
 
-          {isXbarChart && (
+          {usesSampleSize && (
             <div>
               <label htmlFor="sample-size" className="block text-sm font-medium text-gray-700 mb-1">
-                {t('fileUpload.sampleSize')}
+                {t(isXbarChart ? 'fileUpload.sampleSize' : selectedChartType === 'uChart' ? 'controlPanel.opportunitySize' : 'controlPanel.inspectedUnits')}
               </label>
               <input
                 id="sample-size"
                 type="number"
-                min={2}
-                max={25}
-                className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50"
+                min={sizeRule.kind === 'integerRange' ? sizeRule.min : Number.MIN_VALUE}
+                max={sizeRule.kind === 'integerRange' ? sizeRule.max : undefined}
+                step={sizeRule.kind === 'integerRange' ? 1 : 'any'}
+                className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50"
                 value={effectiveSampleSize}
                 onChange={(event) => {
                   const nextSize = Number(event.target.value);
                   if (Number.isFinite(nextSize)) {
-                    setSampleSize(Math.max(2, Math.min(25, Math.round(nextSize))));
+                    if (sizeRule.kind === 'integerRange') setSampleSize(Math.max(sizeRule.min, Math.min(sizeRule.max, Math.round(nextSize))));
+                    else if (nextSize > 0) setSampleSize(nextSize);
                   }
                 }}
-                disabled={!isDataLoaded || selectedColumns.length > 1}
+                disabled={!isDataLoaded || (isXbarChart && selectedColumns.length > 1)}
               />
               <p className="text-xs text-gray-500 mt-1">
-                {selectedColumns.length > 1
+                {isXbarChart && selectedColumns.length > 1
                   ? `Effective subgroup size follows selected Y columns: ${selectedColumns.length}`
-                  : t('fileUpload.sampleSizeHint')}
+                  : t(isXbarChart ? 'fileUpload.sampleSizeHint' : selectedChartType === 'uChart' ? 'controlPanel.opportunitySizeHint' : 'controlPanel.inspectedUnitsHint')}
               </p>
             </div>
           )}
@@ -160,7 +183,7 @@ const ControlPanel: React.FC = () => {
                 id="lower-spec-limit"
                 type="number"
                 step="any"
-                className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50"
+                className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50"
                 value={chartOptions.lowerSpecLimit ?? ''}
                 onChange={(event) => updateNumericChartOption('lowerSpecLimit', event.target.value)}
                 disabled={!isDataLoaded}
@@ -174,7 +197,7 @@ const ControlPanel: React.FC = () => {
                 id="upper-spec-limit"
                 type="number"
                 step="any"
-                className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50"
+                className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50"
                 value={chartOptions.upperSpecLimit ?? ''}
                 onChange={(event) => updateNumericChartOption('upperSpecLimit', event.target.value)}
                 disabled={!isDataLoaded}
@@ -189,7 +212,7 @@ const ControlPanel: React.FC = () => {
               </label>
               <select
                 id="denominator-column"
-                className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500"
                 value={denominatorColumn || ''}
                 onChange={(event) => setDenominatorColumn(event.target.value || null)}
                 disabled={!isDataLoaded}
@@ -213,7 +236,7 @@ const ControlPanel: React.FC = () => {
               id="target-value"
               type="number"
               step="any"
-              className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50"
+              className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50"
               value={chartOptions.targetValue ?? ''}
               onChange={(event) => updateNumericChartOption('targetValue', event.target.value)}
               disabled={!isDataLoaded}
@@ -247,7 +270,7 @@ const ControlPanel: React.FC = () => {
           <input
             id="chart-title"
             type="text"
-            className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500"
             value={chartOptions.title}
             onChange={(e) => setChartOptions({ ...chartOptions, title: e.target.value })}
             disabled={!isDataLoaded}
@@ -261,7 +284,7 @@ const ControlPanel: React.FC = () => {
           <input
             id="x-axis-label"
             type="text"
-            className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500"
             value={chartOptions.xAxisLabel}
             onChange={(e) => setChartOptions({ ...chartOptions, xAxisLabel: e.target.value })}
             disabled={!isDataLoaded}
@@ -275,7 +298,7 @@ const ControlPanel: React.FC = () => {
           <input
             id="y-axis-label"
             type="text"
-            className="w-full rounded-md border border-gray-300 shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            className="w-full rounded-md border border-gray-300 shadow-xs py-2 px-3 focus:outline-hidden focus:ring-blue-500 focus:border-blue-500"
             value={chartOptions.yAxisLabel}
             onChange={(e) => setChartOptions({ ...chartOptions, yAxisLabel: e.target.value })}
             disabled={!isDataLoaded}
@@ -290,7 +313,7 @@ const ControlPanel: React.FC = () => {
             <input
               id="show-control-limits"
               type="checkbox"
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm"
               checked={chartOptions.showControlLimits}
               onChange={(e) => setChartOptions({ ...chartOptions, showControlLimits: e.target.checked })}
               disabled={!isDataLoaded}
@@ -304,7 +327,7 @@ const ControlPanel: React.FC = () => {
             <input
               id="show-center-line"
               type="checkbox"
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm"
               checked={chartOptions.showCenterLine}
               onChange={(e) => setChartOptions({ ...chartOptions, showCenterLine: e.target.checked })}
               disabled={!isDataLoaded}
@@ -317,8 +340,8 @@ const ControlPanel: React.FC = () => {
             <label className="inline-flex items-center text-sm">
               <input
                 type="checkbox"
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mr-2"
-                checked={chartOptions.showSigma1}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm mr-2"
+                checked={chartOptions.showSigma1 ?? false}
                 onChange={(e) => setChartOptions({ ...chartOptions, showSigma1: e.target.checked })}
                 disabled={!isDataLoaded}
               />
@@ -327,8 +350,8 @@ const ControlPanel: React.FC = () => {
             <label className="inline-flex items-center text-sm">
               <input
                 type="checkbox"
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mr-2"
-                checked={chartOptions.showSigma2}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm mr-2"
+                checked={chartOptions.showSigma2 ?? false}
                 onChange={(e) => setChartOptions({ ...chartOptions, showSigma2: e.target.checked })}
                 disabled={!isDataLoaded}
               />
@@ -337,8 +360,8 @@ const ControlPanel: React.FC = () => {
             <label className="inline-flex items-center text-sm">
               <input
                 type="checkbox"
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mr-2"
-                checked={chartOptions.showSigma3}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm mr-2"
+                checked={chartOptions.showSigma3 ?? false}
                 onChange={(e) => setChartOptions({ ...chartOptions, showSigma3: e.target.checked })}
                 disabled={!isDataLoaded}
               />
@@ -350,7 +373,7 @@ const ControlPanel: React.FC = () => {
             <input
               id="show-rule-violations"
               type="checkbox"
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded-sm"
               checked={chartOptions.showRuleViolations}
               onChange={(e) => setChartOptions({ ...chartOptions, showRuleViolations: e.target.checked })}
               disabled={!isDataLoaded}
@@ -359,6 +382,8 @@ const ControlPanel: React.FC = () => {
               {t('controlPanel.highlightViolations')}
             </label>
           </div>
+
+
         </div>
         {/* Chart Type Informational Panel */}
         <ChartTypeInfo />

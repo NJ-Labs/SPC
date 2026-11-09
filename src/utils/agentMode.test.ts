@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractAgentRecommendationFromMessage,
+  normalizeAgentChartType,
+  resolveHeaderName,
   stripAgentRecommendationFromMessage,
   validateAgentRecommendationAgainstHeaders,
 } from './agentMode';
@@ -112,5 +114,36 @@ json
 \`\`\``;
 
     expect(stripAgentRecommendationFromMessage(message, 'fallback')).toBe('* Switch to X-bar R chart.');
+  });
+
+  it('normalizes chart-type paraphrases and numeric strings from weaker models', () => {
+    const message = `\`\`\`json
+{"recommendation":{"chartType":"X-bar R chart","yColumns":["a","b"],"sampleSize":"4","reason":"subgroups"}}
+\`\`\``;
+
+    const recommendation = extractAgentRecommendationFromMessage(message);
+
+    expect(recommendation?.chartType).toBe('xBarR');
+    expect(recommendation?.sampleSize).toBe(4);
+    expect(normalizeAgentChartType('I-MR')).toBe('individual');
+    expect(normalizeAgentChartType('u chart')).toBe('uChart');
+    expect(normalizeAgentChartType('pie chart')).toBeNull();
+  });
+
+  it('ignores non-object recommendation payloads', () => {
+    expect(extractAgentRecommendationFromMessage('```json\n{"recommendation":"xBarR"}\n```')).toBeNull();
+    expect(extractAgentRecommendationFromMessage('```json\n{"recommendation":["xBarR"]}\n```')).toBeNull();
+  });
+
+  it('resolves header case uniquely and drops a denominator equal to the Y column', () => {
+    const validated = validateAgentRecommendationAgainstHeaders(
+      { chartType: 'uChart', yColumns: ['defects', 'DEFECTS'], denominatorColumn: 'Defects', xAxisColumn: 'date', reason: '' },
+      ['Defects', 'Units', 'Date'],
+    );
+
+    expect(validated.yColumns).toEqual(['Defects']);
+    expect(validated.denominatorColumn).toBeUndefined();
+    expect(validated.xAxisColumn).toBe('Date');
+    expect(resolveHeaderName('value', ['Value', 'VALUE'])).toBeNull();
   });
 });

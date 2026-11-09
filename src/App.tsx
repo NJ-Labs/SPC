@@ -1,4 +1,3 @@
-import React from 'react';
 import { AppContextProvider } from './context/AppContext';
 import { LanguageProvider } from './context/LanguageContext';
 import Header from './components/layout/Header';
@@ -11,7 +10,7 @@ function App() {
       <AppContextProvider>
         <div className="flex flex-col min-h-screen bg-gray-50">
           <Header />
-          <main className="flex-grow">
+          <main className="grow">
             <Dashboard />
           </main>
           <Footer />

@@ -10,14 +10,14 @@ const Header: React.FC = () => {
   };
 
   return (
-    <header className="bg-gradient-to-r from-blue-900 to-blue-700 text-white shadow-md">
+    <header className="bg-linear-to-r/srgb from-blue-900 to-blue-700 text-white shadow-md">
       <div className="container mx-auto px-4 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3 rtl:space-x-reverse">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
             <img
               src="/images/logo.png"
               alt="SPC Logo"
-              className="h-16 w-auto rounded-sm shadow-sm p-1"
+              className="h-16 w-auto rounded-xs shadow-xs p-1"
               loading="eager"
               decoding="async"
             />
@@ -31,16 +31,16 @@ const Header: React.FC = () => {
             </div>
           </div>
           
-          <div className="flex items-center space-x-3 rtl:space-x-reverse">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
             <img
               src="/images/slogen.png"
               alt="SPC Logo"
-              className="h-11 w-auto rounded-md bg-white/00 shadow-sm p-1"
+              className="h-11 max-w-[12rem] w-auto object-contain rounded-md bg-white/00 shadow-xs p-1"
               loading="eager"
               decoding="async"
             />
             <button 
-              className="flex items-center space-x-1 rtl:space-x-reverse bg-blue-500 hover:bg-blue-600 transition-colors px-3 py-1.5 rounded-md text-sm font-medium no-print"
+              className="flex items-center space-x-1 bg-blue-500 hover:bg-blue-600 transition-colors px-3 py-1.5 rounded-md text-sm font-medium no-print"
               onClick={toggleLanguage}
               title={language === 'en' ? 'Switch to Hebrew' : 'עבור לאנגלית'}
             >
@@ -48,7 +48,7 @@ const Header: React.FC = () => {
               <span className="font-semibold">{language === 'en' ? 'עב' : 'EN'}</span>
             </button>
             <button 
-              className="flex items-center space-x-1 rtl:space-x-reverse bg-teal-500 hover:bg-teal-600 transition-colors px-3 py-1.5 rounded-md text-sm font-medium no-print"
+              className="flex items-center space-x-1 bg-teal-500 hover:bg-teal-600 transition-colors px-3 py-1.5 rounded-md text-sm font-medium no-print"
               onClick={() => {
                 alert(t('header.helpMessage'));
               }}

@@ -36,7 +36,7 @@ RUN set -eux; \
     if [ -n "${PIP_TRUSTED_HOST:-}" ]; then export UV_INSECURE_HOST="$PIP_TRUSTED_HOST"; fi; \
     uv sync --frozen --no-dev --no-install-project
 
-COPY main.py .
+COPY main.py spc_visuals.py env_config.py ./
 
 EXPOSE 8001
 CMD ["/app/.venv/bin/python", "main.py"]

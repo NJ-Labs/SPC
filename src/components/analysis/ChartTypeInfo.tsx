@@ -45,7 +45,7 @@ const ChartTypeInfo: React.FC = () => {
         <button
           type="button"
           onClick={() => setShowUseCases(s => !s)}
-          className="text-sm text-blue-600 hover:text-blue-800 focus:outline-none focus:underline"
+          className="text-sm text-blue-600 hover:text-blue-800 focus:outline-hidden focus:underline"
         >
           {showUseCases ? 'Hide Example Use Cases' : 'Show Example Use Cases'}
         </button>

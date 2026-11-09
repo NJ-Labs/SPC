@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -8,48 +8,46 @@ import {
   Title,
   Tooltip,
   Legend,
-  ChartOptions,
+  type ChartOptions as ChartJsOptions,
 } from 'chart.js';
 import zoomPlugin from 'chartjs-plugin-zoom';
 import { useAppContext } from '../../../context/AppContext';
-import { prepareHistogramData } from '../../../utils/spcCalculations';
+import { finiteExtent, formatPlotted, histogramBins } from '../chartSeries';
+import { resetChartView } from '../chartView';
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-  zoomPlugin
-);
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, zoomPlugin);
+
+const moment = (values: number[], power: number): number => {
+  const n = values.length;
+  const mean = values.reduce((sum, value) => sum + value, 0) / n;
+  const deviation = Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / n);
+  if (n < 3 || deviation === 0) return Number.NaN;
+  return values.reduce((sum, value) => sum + ((value - mean) / deviation) ** power, 0) / n;
+};
 
 const Histogram: React.FC = () => {
   const { processedData, selectedColumns, chartOptions } = useAppContext();
   const chartRef = useRef<ChartJS<'bar'> | null>(null);
-  
+
+  const values = useMemo(
+    () => (processedData?.controlLimits.chartValues ?? []).filter(Number.isFinite),
+    [processedData],
+  );
+  const histogram = useMemo(() => histogramBins(values), [values]);
+
   if (!processedData || !selectedColumns.length) {
     return <div>No data available</div>;
   }
-  
-  const selectedColumn = selectedColumns[0];
-  const data = processedData.data;
+  if (!histogram) {
+    return <div className="text-gray-500">No numeric values to plot in the selected column.</div>;
+  }
+
+  const { bins, counts } = histogram;
   const { centerLine, sigma } = processedData.controlLimits;
-  
-  // Extract data values
-  const values = data.map(row => parseFloat(row[selectedColumn]));
-  
-  // Prepare histogram data
-  const { bins, counts } = prepareHistogramData(values);
-  
-  // Create bin labels (midpoints)
-  const binLabels = bins.slice(0, -1).map((bin, i) => {
-    const nextBin = bins[i + 1];
-    return ((bin + nextBin) / 2).toFixed(2);
-  });
-  
+  const { min, max } = finiteExtent(values) ?? { min: Number.NaN, max: Number.NaN };
+
   const chartData = {
-    labels: binLabels,
+    labels: bins.slice(0, -1).map((bin, index) => ((bin + bins[index + 1]) / 2).toFixed(2)),
     datasets: [
       {
         label: 'Frequency',
@@ -60,132 +58,69 @@ const Histogram: React.FC = () => {
       },
     ],
   };
-  
-  type ScaleWithMinMax = { min?: number; max?: number };
-  const resetChart = () => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    if (typeof chart.resetZoom === 'function') {
-      try { chart.resetZoom(); return; } catch { /* noop */ }
-    }
-    chart.options.scales = chart.options.scales || {};
-    if (chart.options.scales.x) {
-      const sx = chart.options.scales.x as unknown as ScaleWithMinMax;
-      delete sx.min; delete sx.max;
-    }
-    if (chart.options.scales.y) {
-      const sy = chart.options.scales.y as unknown as ScaleWithMinMax;
-      delete sy.min; delete sy.max;
-    }
-    chart.update('none');
-  };
 
-  const chartOptions1: ChartOptions<'bar'> = {
+  const options: ChartJsOptions<'bar'> = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: {
-        position: 'top',
-      },
-      title: {
-        display: true,
-        text: chartOptions.title || 'Histogram',
-        font: {
-          size: 16,
-        }
-      },
+      legend: { position: 'top' },
+      title: { display: true, text: chartOptions.title || 'Histogram', font: { size: 16 } },
       tooltip: {
         callbacks: {
-          title: (tooltipItems) => {
-            const index = tooltipItems[0].dataIndex;
-            const binStart = bins[index];
-            const binEnd = bins[index + 1];
-            return `Range: ${binStart.toFixed(2)} - ${binEnd.toFixed(2)}`;
+          title: (items) => {
+            const index = items[0]?.dataIndex ?? 0;
+            return `Range: ${bins[index].toFixed(2)} - ${bins[index + 1].toFixed(2)}`;
           },
-          label: (context) => {
-            return `Frequency: ${context.parsed.y}`;
-          }
-        }
+          label: (context) => `Frequency: ${context.parsed.y ?? 0}`,
+        },
       },
       zoom: {
         zoom: { wheel: { enabled: true, modifierKey: 'ctrl' }, pinch: { enabled: true }, mode: 'xy' },
         pan: { enabled: true, mode: 'xy' },
-      }
+      },
     },
     scales: {
-      x: {
-        title: {
-          display: true,
-          text: chartOptions.xAxisLabel || 'Value',
-        },
-      },
-      y: {
-        title: {
-          display: true,
-          text: chartOptions.yAxisLabel || 'Frequency',
-        },
-        beginAtZero: true,
-      },
+      x: { title: { display: true, text: chartOptions.xAxisLabel || 'Value' } },
+      y: { title: { display: true, text: chartOptions.yAxisLabel || 'Frequency' }, beginAtZero: true },
     },
   };
-  
+
   return (
     <div>
-      <div className="flex gap-2 justify-end mb-2">
-        <button className="px-2 py-1 text-sm rounded bg-gray-100 hover:bg-gray-200 border" onClick={resetChart}>Reset View</button>
+      <div className="mb-2 flex justify-end gap-2">
+        <button
+          type="button"
+          className="rounded-sm border border-gray-200 bg-gray-100 px-2 py-1 text-sm hover:bg-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-600"
+          onClick={() => resetChartView(chartRef.current as ChartJS | null)}
+        >
+          Reset View
+        </button>
       </div>
       <div style={{ height: '400px' }}>
-        <Bar ref={chartRef} data={chartData} options={chartOptions1} />
+        <Bar ref={chartRef} data={chartData} options={options} role="img" aria-label={`${chartOptions.title || 'Histogram'}: ${values.length} values in ${counts.length} bins`} />
       </div>
-      <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-        <div className="bg-blue-50 p-3 rounded-md">
+      <div className="mt-4 grid grid-cols-1 gap-4 text-sm md:grid-cols-3">
+        <div className="rounded-md bg-blue-50 p-3">
           <p className="font-medium">Summary Statistics</p>
-          <p>Mean: {centerLine.toFixed(3)}</p>
-          <p>Standard Deviation: {sigma.toFixed(3)}</p>
+          <p>Mean: {formatPlotted(centerLine, 3)}</p>
+          <p>Standard Deviation: {formatPlotted(sigma, 3)}</p>
           <p>Sample Size: {values.length}</p>
         </div>
-        <div className="bg-blue-50 p-3 rounded-md">
-          <p className="font-medium">Percentiles</p>
-          <p>Minimum: {Math.min(...values).toFixed(3)}</p>
-          <p>Maximum: {Math.max(...values).toFixed(3)}</p>
-          <p>Range: {(Math.max(...values) - Math.min(...values)).toFixed(3)}</p>
+        <div className="rounded-md bg-blue-50 p-3">
+          <p className="font-medium">Range</p>
+          <p>Minimum: {formatPlotted(min, 3)}</p>
+          <p>Maximum: {formatPlotted(max, 3)}</p>
+          <p>Range: {formatPlotted(max - min, 3)}</p>
         </div>
-        <div className="bg-blue-50 p-3 rounded-md">
+        <div className="rounded-md bg-blue-50 p-3">
           <p className="font-medium">Distribution</p>
-          <p>Skewness: {calculateSkewness(values).toFixed(3)}</p>
-          <p>Kurtosis: {calculateKurtosis(values).toFixed(3)}</p>
-          <p>Bins: {bins.length - 1}</p>
+          <p>Skewness: {formatPlotted(moment(values, 3), 3)}</p>
+          <p>Excess kurtosis: {formatPlotted(moment(values, 4) - 3, 3)}</p>
+          <p>Bins: {counts.length}</p>
         </div>
       </div>
     </div>
   );
-};
-
-// Calculate skewness
-const calculateSkewness = (values: number[]): number => {
-  const n = values.length;
-  const mean = values.reduce((sum, val) => sum + val, 0) / n;
-  const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / n;
-  const stdDev = Math.sqrt(variance);
-  
-  const cubedDeviations = values.map(val => Math.pow((val - mean) / stdDev, 3));
-  const skewness = cubedDeviations.reduce((sum, val) => sum + val, 0) / n;
-  
-  return skewness;
-};
-
-// Calculate kurtosis
-const calculateKurtosis = (values: number[]): number => {
-  const n = values.length;
-  const mean = values.reduce((sum, val) => sum + val, 0) / n;
-  const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / n;
-  const stdDev = Math.sqrt(variance);
-  
-  const fourthPowerDeviations = values.map(val => Math.pow((val - mean) / stdDev, 4));
-  const kurtosis = fourthPowerDeviations.reduce((sum, val) => sum + val, 0) / n;
-  
-  // Subtract 3 to get excess kurtosis (normal distribution has kurtosis of 3)
-  return kurtosis - 3;
 };
 
 export default Histogram;

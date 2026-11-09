@@ -10,9 +10,8 @@ import {
   buildInitialUserPrompt,
   summarizeDatasetForAi,
 } from '../../utils/aiHelpers';
-import type { AiChatAttachment, AiChatMessage, AiWorksheetOption } from '../../types/AiTypes';
+import type { AgentConfigEvidence, AiChatAttachment, AiChatMessage, AiWorksheetOption } from '../../types/AiTypes';
 import { chartMeta } from '../../types/chartMeta';
-import { MarkdownText } from '../common/MarkdownText';
 import {
   ChainOfThought,
   ChainOfThoughtHeader,
@@ -20,21 +19,66 @@ import {
   ChainOfThoughtStep,
 } from '../ai-elements/chain-of-thought';
 import {
-  AGENT_CHART_TYPES,
   buildAgentTurnRequest,
+  scopeDatasetForAi,
   type AgentControlPatch,
   type AgentControlsSnapshotInput,
   type AgentTurnResponse,
 } from '../../utils/aiTools';
 import { resolveAiRuntimeConfig } from '../../utils/runtimeConfig';
+import { AgentConfigEvidenceView } from './AgentConfigEvidence';
+import { AssistantMessageContent } from './AssistantMessageContent';
+import {
+  buildAgentConfigState,
+  buildRequestHistory,
+  EVIDENCE_OUTCOME_KEYS,
+  resolveAgentControlPatch,
+  type AgentRequestContext,
+} from './agentConfig';
+import { ASSISTANT_HTML_ARTIFACT_GUIDE, ASSISTANT_HTML_GUIDE_MARKER } from './assistantHtml';
+
+const extractAiErrorMessage = async (response: Response, t: (key: string) => string): Promise<string> => {
+  const code = response.headers.get('X-SPC-Error-Code');
+  if (code === 'upstream_api_key_invalid') return t('ai.invalidApiKey');
+  if (code === 'upstream_permission_denied') return t('ai.keyPermissionDenied');
+  const fallback = `AI service request failed (${response.status}${response.statusText ? ` ${response.statusText}` : ''}).`;
+
+  try {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      const message =
+        payload?.error?.message
+        ?? payload?.error
+        ?? payload?.detail
+        ?? payload?.message;
+      if (typeof message === 'string' && message.trim()) {
+        return message.trim();
+      }
+    } else {
+      const bodyText = (await response.text()).trim();
+      if (bodyText) {
+        return bodyText;
+      }
+    }
+  } catch {
+    // ignore parse errors and use fallback
+  }
+
+  return fallback;
+};
 
 interface AiAssistantPanelProps {
   onClose: () => void;
 }
 
-const hasOwn = <T extends object>(value: T, key: PropertyKey): boolean => (
-  Object.prototype.hasOwnProperty.call(value, key)
-);
+const COPY_FEEDBACK_MS = 1600;
+const STICK_TO_BOTTOM_PX = 48;
+let messageCounter = 0;
+const nextMessageId = (prefix: string): string => {
+  messageCounter += 1;
+  return `${prefix}-${Date.now()}-${messageCounter}`;
+};
 
 const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
   const {
@@ -46,6 +90,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
     sampleSize,
     selectedChartType,
     chartOptions,
+    selectedDataRange,
     setSelectedChartType,
     setChartOptions,
     setSelectedColumns,
@@ -67,13 +112,64 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
   const [agentModeEnabled, setAgentModeEnabled] = useState(false);
   const [agentFeedback, setAgentFeedback] = useState<string | null>(null);
   const [selectedAiSheetIndex, setSelectedAiSheetIndex] = useState<number | null>(null);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const conversationRef = useRef<AiChatMessage[]>([]);
   const lastSummaryRef = useRef<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sheetSelectionContextRef = useRef<string | null>(null);
   const agentAutopilotContextRef = useRef<string | null>(null);
   const suppressNextAgentAutopilotRef = useRef(false);
   const requestInFlightRef = useRef(false);
+  const initializationStartedRef = useRef(false);
+
+  // Responses arrive long after the render that started the request, so settings and the dataset
+  // are read from this ref at apply time rather than from a stale closure.
+  const currentConfig = useMemo(
+    () => buildAgentConfigState({
+      chartType: selectedChartType,
+      chartOptions,
+      selectedColumns,
+      xAxisColumn,
+      denominatorColumn,
+      sampleSize,
+    }),
+    [chartOptions, denominatorColumn, sampleSize, selectedChartType, selectedColumns, xAxisColumn],
+  );
+  const datasetFingerprint = useMemo(
+    () => (rawData
+      ? [
+        rawData.fileName,
+        rawData.activeSheetIndex ?? 0,
+        rawData.data.length,
+        rawData.headers.join('\u0001'),
+        // The charted range changes which rows the columns mean, so it is part of "the same data".
+        selectedDataRange ? JSON.stringify(selectedDataRange) : 'all-rows',
+      ].join('::')
+      : 'no-dataset'),
+    [rawData, selectedDataRange],
+  );
+  const dataRef = rawData?.data ?? null;
+  const liveRef = useRef({
+    config: currentConfig,
+    chartOptions,
+    headers: rawData?.headers ?? [],
+    fingerprint: datasetFingerprint,
+    dataRef,
+  });
+  liveRef.current = {
+    config: currentConfig,
+    chartOptions,
+    headers: rawData?.headers ?? [],
+    fingerprint: datasetFingerprint,
+    dataRef,
+  };
+
+  useEffect(() => () => {
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+  }, []);
 
   const worksheetOptions = useMemo<AiWorksheetOption[]>(() => {
     if (!rawData?.sheets?.length) {
@@ -90,7 +186,11 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
 
   const requiresWorksheetSelection = Boolean(rawData?.sheets && rawData.sheets.length > 1 && selectedAiSheetIndex === null);
 
-  const systemPrompt = useMemo(() => buildAssistantSystemPrompt(language, agentModeEnabled), [agentModeEnabled, language]);
+  const systemPrompt = useMemo(() => {
+    const base = buildAssistantSystemPrompt(language, agentModeEnabled);
+    // Idempotent: skipped when the shared prompt builder already carries the guide.
+    return base.includes(ASSISTANT_HTML_GUIDE_MARKER) ? base : `${base}\n\n${ASSISTANT_HTML_ARTIFACT_GUIDE}`;
+  }, [agentModeEnabled, language]);
   const friendlyChartName = useMemo(
     () => chartMeta[selectedChartType]?.name ?? selectedChartType,
     [selectedChartType],
@@ -98,19 +198,20 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
   const datasetSummary = useMemo(
     () =>
       summarizeDatasetForAi(
-        rawData,
+        scopeDatasetForAi(rawData, selectedDataRange),
         processedData,
         selectedColumns,
         xAxisColumn,
         denominatorColumn,
         sampleSize,
+        { chartType: selectedChartType, ruleSet: chartOptions.ruleSet },
       ),
-    [denominatorColumn, processedData, rawData, sampleSize, selectedColumns, xAxisColumn],
+    [chartOptions.ruleSet, denominatorColumn, processedData, rawData, sampleSize, selectedChartType, selectedColumns, selectedDataRange, xAxisColumn],
   );
 
   const appendAssistantMessage = useCallback((content: string) => {
     const assistantMessage: AiChatMessage = {
-      id: `assistant-${Date.now()}`,
+      id: nextMessageId('assistant'),
       role: 'assistant',
       content,
       createdAt: Date.now(),
@@ -127,98 +228,50 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
     return Math.max(1, Math.ceil(wordCount * 1.35));
   };
 
-  const applyAgentControlPatch = useCallback((patch: AgentControlPatch | null | undefined) => {
-    if (!patch) {
-      return;
-    }
+  const captureRequestContext = useCallback((): AgentRequestContext => ({
+    config: liveRef.current.config,
+    fingerprint: liveRef.current.fingerprint,
+    dataRef: liveRef.current.dataRef,
+  }), []);
 
-    const headers = rawData?.headers ?? [];
-    const applied: string[] = [];
-    let nextChartType = selectedChartType;
-    let nextSelectedColumns = selectedColumns;
-
-    if (typeof patch.chartType === 'string' && AGENT_CHART_TYPES.includes(patch.chartType)) {
-      nextChartType = patch.chartType;
-      setSelectedChartType(patch.chartType);
-      applied.push(t('ai.agentProposedChart'));
-    }
-
-    if (Array.isArray(patch.yColumns)) {
-      const nextYColumns = Array.from(new Set(patch.yColumns.filter((value): value is string => typeof value === 'string')))
-        .filter((value) => headers.includes(value));
-      if (nextYColumns.length > 0 || patch.yColumns.length === 0) {
-        nextSelectedColumns = nextYColumns;
-        setSelectedColumns(nextYColumns);
-        applied.push(t('ai.agentProposedY'));
-      }
-    }
-
-    if (hasOwn(patch, 'xAxisColumn')) {
-      if (patch.xAxisColumn === null || patch.xAxisColumn === undefined) {
-        setXAxisColumn(null);
-        applied.push(t('ai.agentProposedX'));
-      } else if (typeof patch.xAxisColumn === 'string' && headers.includes(patch.xAxisColumn)) {
-        setXAxisColumn(patch.xAxisColumn);
-        applied.push(t('ai.agentProposedX'));
-      }
-    }
-
-    if (hasOwn(patch, 'denominatorColumn')) {
-      if (patch.denominatorColumn === null || patch.denominatorColumn === undefined) {
-        setDenominatorColumn(null);
-        applied.push('denominatorColumn');
-      } else if (typeof patch.denominatorColumn === 'string' && headers.includes(patch.denominatorColumn)) {
-        setDenominatorColumn(patch.denominatorColumn);
-        applied.push('denominatorColumn');
-      }
-    }
-
-    const shouldUseYColumnsAsSubgroups =
-      (nextChartType === 'xBarS' || nextChartType === 'xBarR') && nextSelectedColumns.length > 1;
-    const nextSampleSize = shouldUseYColumnsAsSubgroups
-      ? nextSelectedColumns.length
-      : patch.sampleSize;
-    if (typeof nextSampleSize === 'number' && Number.isFinite(nextSampleSize)) {
-      setSampleSize(Math.max(2, Math.min(25, Math.round(nextSampleSize))));
-      applied.push(t('ai.agentProposedSample'));
-    }
-
-    const nextChartOptions = { ...chartOptions };
-    let chartOptionsChanged = false;
-    const assignChartOption = <K extends keyof typeof nextChartOptions>(key: K, value: typeof nextChartOptions[K] | undefined, label: string) => {
-      if (value === undefined || value === nextChartOptions[key]) {
-        return;
-      }
-      nextChartOptions[key] = value;
-      chartOptionsChanged = true;
-      applied.push(label);
-    };
-
-    assignChartOption('title', typeof patch.chartLabel === 'string' ? patch.chartLabel : undefined, t('controlPanel.chartTitle'));
-    assignChartOption('xAxisLabel', typeof patch.zAxisLabel === 'string' ? patch.zAxisLabel : undefined, t('controlPanel.xAxisLabel'));
-    assignChartOption('yAxisLabel', typeof patch.yAxisLabel === 'string' ? patch.yAxisLabel : undefined, t('controlPanel.yAxisLabel'));
-    assignChartOption('showControlLimits', typeof patch.showControlLimits === 'boolean' ? patch.showControlLimits : undefined, 'showControlLimits');
-    assignChartOption('showCenterLine', typeof patch.showCenterLine === 'boolean' ? patch.showCenterLine : undefined, 'showCenterLine');
-    assignChartOption('showRuleViolations', typeof patch.showRuleViolations === 'boolean' ? patch.showRuleViolations : undefined, 'showRuleViolations');
-    assignChartOption('showSigma1', typeof patch.showSigma1 === 'boolean' ? patch.showSigma1 : undefined, 'showSigma1');
-    assignChartOption('showSigma2', typeof patch.showSigma2 === 'boolean' ? patch.showSigma2 : undefined, 'showSigma2');
-    assignChartOption('showSigma3', typeof patch.showSigma3 === 'boolean' ? patch.showSigma3 : undefined, 'showSigma3');
-    assignChartOption('colorScheme', typeof patch.colorScheme === 'string' ? patch.colorScheme : undefined, 'colorScheme');
-
-    if (chartOptionsChanged) {
-      setChartOptions(nextChartOptions);
-    }
-
-    setAgentFeedback(
-      applied.length
-        ? `${t('ai.agentApplied')} ${applied.join(', ')}`
-        : t('ai.agentNoChangeDetected'),
+  const applyAgentControlPatch = useCallback((
+    patch: AgentControlPatch | null | undefined,
+    request: AgentRequestContext,
+  ): AgentConfigEvidence => {
+    const live = liveRef.current;
+    const { next, updates, evidence } = resolveAgentControlPatch(
+      patch as Record<string, unknown> | null | undefined,
+      live.config,
+      {
+        headers: live.headers,
+        requestSnapshot: request.config,
+        staleDataset: live.fingerprint !== request.fingerprint || live.dataRef !== request.dataRef,
+      },
     );
 
-    if (applied.length > 0) {
+    if (updates.chartType !== undefined) setSelectedChartType(updates.chartType);
+    if (updates.selectedColumns !== undefined) setSelectedColumns(updates.selectedColumns);
+    if ('xAxisColumn' in updates) setXAxisColumn(updates.xAxisColumn ?? null);
+    if ('denominatorColumn' in updates) setDenominatorColumn(updates.denominatorColumn ?? null);
+    if (updates.sampleSize !== undefined) setSampleSize(updates.sampleSize);
+    const nextChartOptions = updates.chartOptions ? { ...live.chartOptions, ...updates.chartOptions } : live.chartOptions;
+    if (updates.chartOptions) setChartOptions(nextChartOptions);
+
+    // Two turns can resolve before React re-renders, so later ones must see these writes.
+    liveRef.current = { ...live, config: next, chartOptions: nextChartOptions };
+
+    const counts = [
+      evidence.counts.applied > 0 ? `${t('ai.evidence.applied')} ${evidence.counts.applied}` : null,
+      evidence.counts.unchanged > 0 ? `${t('ai.evidence.unchanged')} ${evidence.counts.unchanged}` : null,
+      evidence.counts.rejected > 0 ? `${t('ai.evidence.rejected')} ${evidence.counts.rejected}` : null,
+    ].filter(Boolean).join(' · ');
+    setAgentFeedback([t(EVIDENCE_OUTCOME_KEYS[evidence.outcome]), counts].filter(Boolean).join(' — '));
+
+    if (evidence.counts.applied > 0) {
       suppressNextAgentAutopilotRef.current = true;
     }
-  }, [chartOptions, rawData?.headers, selectedChartType, selectedColumns, setChartOptions, setDenominatorColumn, setSampleSize, setSelectedChartType, setSelectedColumns, setXAxisColumn, t]);
+    return evidence;
+  }, [setChartOptions, setDenominatorColumn, setSampleSize, setSelectedChartType, setSelectedColumns, setXAxisColumn, t]);
 
   const runAgentModeTurn = useCallback(async (
     conversationForRequest: AiChatMessage[],
@@ -238,6 +291,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
       language,
       agentModeEnabled: true,
       selectedAiSheetIndex,
+      selectedDataRange,
     };
 
     const response = await fetch(endpoint, {
@@ -256,45 +310,20 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
     });
 
     if (!response.ok) {
-      throw new Error(await extractAiErrorMessage(response));
+      throw new Error(await extractAiErrorMessage(response, t));
     }
 
     return await response.json() as AgentTurnResponse;
-  }, [chartOptions, datasetSummary, denominatorColumn, language, processedData, rawData, sampleSize, selectedAiSheetIndex, selectedChartType, selectedColumns, systemPrompt, xAxisColumn]);
+  }, [chartOptions, datasetSummary, denominatorColumn, language, processedData, rawData, sampleSize, selectedAiSheetIndex, selectedChartType, selectedColumns, selectedDataRange, systemPrompt, t, xAxisColumn]);
 
-  const extractAiErrorMessage = async (response: Response): Promise<string> => {
-    const fallback = `AI service request failed (${response.status}${response.statusText ? ` ${response.statusText}` : ''}).`;
-
-    try {
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const payload = await response.json();
-        const message =
-          payload?.error?.message
-          ?? payload?.error
-          ?? payload?.detail
-          ?? payload?.message;
-        if (typeof message === 'string' && message.trim()) {
-          return message.trim();
-        }
-      } else {
-        const bodyText = (await response.text()).trim();
-        if (bodyText) {
-          return bodyText;
-        }
-      }
-    } catch {
-      // ignore parse errors and use fallback
-    }
-
-    return fallback;
-  };
-
-  const handleCopy = async (content: string) => {
+  const handleCopy = async (messageId: string, content: string) => {
     try {
       await navigator.clipboard.writeText(content);
+      setCopiedId(messageId);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopiedId(null), COPY_FEEDBACK_MS);
     } catch {
-      // noop
+      setCopiedId(null);
     }
   };
 
@@ -376,7 +405,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
       const requestAgentMode = agentModeEnabled;
 
       const userMessage: AiChatMessage = {
-        id: `user-${Date.now()}`,
+        id: nextMessageId('user'),
         role: 'user',
         content: trimmed,
         createdAt: Date.now(),
@@ -387,6 +416,8 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
       };
 
       const conversationForRequest = [...conversationRef.current, userMessage];
+      // Earlier agent turns carry what the app verified, so stale prose is not mistaken for state.
+      const historyForRequest = buildRequestHistory(conversationForRequest, liveRef.current.config);
       const conversationWithUser = options?.hideUserMessage
         ? conversationRef.current
         : conversationForRequest;
@@ -402,10 +433,9 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
       const { apiUrl, apiKey, model } = resolveAiRuntimeConfig();
 
       if (!apiUrl || !apiKey || !model) {
-        setError(t('ai.notConfigured'));
-        appendAssistantMessage(
-          t('ai.configError'),
-        );
+        const missingGatewayModel = apiUrl === '/' && Boolean(apiKey) && !model;
+        setError(t(missingGatewayModel ? 'ai.gatewayModelMissing' : 'ai.notConfigured'));
+        appendAssistantMessage(t(missingGatewayModel ? 'ai.gatewayModelMissing' : 'ai.configError'));
         setIsLoading(false);
         requestInFlightRef.current = false;
         return;
@@ -424,10 +454,11 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
       try {
         const startTime = Date.now();
         if (requestAgentMode) {
-          const result = await runAgentModeTurn(conversationForRequest, agentEndpoint, apiKey, model, shouldSendTemperature);
-          applyAgentControlPatch(result.controlPatch);
+          const requestContext = captureRequestContext();
+          const result = await runAgentModeTurn(historyForRequest, agentEndpoint, apiKey, model, shouldSendTemperature);
+          const evidence = applyAgentControlPatch(result.controlPatch, requestContext);
           const assistantMessage: AiChatMessage = {
-            id: `assistant-${Date.now()}`,
+            id: nextMessageId('assistant'),
             role: 'assistant',
             content: result.content,
             createdAt: Date.now(),
@@ -436,6 +467,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
             parentUserId: userMessage.id,
             ...(result.reasoning ? { reasoning: result.reasoning } : {}),
             agentModeRequest: true,
+            configEvidence: evidence,
           };
           const conversationWithAssistant = [...conversationWithUser, assistantMessage];
           conversationRef.current = conversationWithAssistant;
@@ -453,7 +485,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
             model,
             messages: [
               { role: 'system', content: systemPrompt },
-              ...conversationForRequest.map((message) => ({
+              ...historyForRequest.map((message) => ({
                 role: message.role,
                 content: message.content,
               })),
@@ -469,7 +501,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
 
         if (supportsStream && response.body) {
           const assistantMessage: AiChatMessage = {
-            id: `assistant-${Date.now()}`,
+            id: nextMessageId('assistant'),
             role: 'assistant',
             content: '',
             createdAt: Date.now(),
@@ -479,6 +511,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
           const withAssistant = [...conversationWithUser, assistantMessage];
           conversationRef.current = withAssistant;
           setMessages(withAssistant);
+          setStreamingMessageId(assistantMessage.id);
 
           const reader = response.body.getReader();
           const decoder = new TextDecoder('utf-8');
@@ -554,7 +587,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
           setMessages([...conversationRef.current]);
         } else {
           if (!response.ok) {
-            throw new Error(await extractAiErrorMessage(response));
+            throw new Error(await extractAiErrorMessage(response, t));
           }
           const payload = await response.json();
           const assistantText: string | undefined = payload?.choices?.[0]?.message?.content?.trim();
@@ -563,7 +596,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
           }
           const reasoningText: string | undefined = payload?.choices?.[0]?.message?.reasoning_content?.trim();
           const assistantMessage: AiChatMessage = {
-            id: `assistant-${Date.now()}`,
+            id: nextMessageId('assistant'),
             role: 'assistant',
             content: assistantText,
             createdAt: Date.now(),
@@ -584,10 +617,11 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
         appendAssistantMessage(`${t('ai.serviceError')}${message}`);
       } finally {
         setIsLoading(false);
+        setStreamingMessageId(null);
         requestInFlightRef.current = false;
       }
     },
-    [agentModeEnabled, appendAssistantMessage, appendWorksheetSelectionMessage, applyAgentControlPatch, requiresWorksheetSelection, runAgentModeTurn, systemPrompt, t],
+    [agentModeEnabled, appendAssistantMessage, appendWorksheetSelectionMessage, applyAgentControlPatch, captureRequestContext, requiresWorksheetSelection, runAgentModeTurn, systemPrompt, t],
   );
 
   const datasetAttachment = useMemo<AiChatAttachment | undefined>(() => {
@@ -610,7 +644,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
 
       const { apiUrl, apiKey, model } = resolveAiRuntimeConfig();
       if (!apiUrl || !apiKey || !model) {
-        setError(t('ai.notConfigured'));
+        setError(t(apiUrl === '/' && apiKey && !model ? 'ai.gatewayModelMissing' : 'ai.notConfigured'));
         requestInFlightRef.current = false;
         return;
       }
@@ -626,18 +660,23 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
 
       const convo = conversationRef.current;
       const targetAssistant = convo[assistantIndex];
-      if (!targetAssistant || targetAssistant.role !== 'assistant') return;
+      if (!targetAssistant || targetAssistant.role !== 'assistant') {
+        requestInFlightRef.current = false;
+        return;
+      }
 
       setIsLoading(true);
+      setStreamingMessageId(targetAssistant.id);
       setError(null);
       const startTime = Date.now();
 
       try {
         // Build messages up to and including the parent user message
-        const subset = convo.slice(0, userIndex + 1);
+        const subset = buildRequestHistory(convo.slice(0, userIndex + 1), liveRef.current.config);
         if (targetAssistant.agentModeRequest) {
+          const requestContext = captureRequestContext();
           const result = await runAgentModeTurn(subset, agentEndpoint, apiKey, model, shouldSendTemperature);
-          applyAgentControlPatch(result.controlPatch);
+          targetAssistant.configEvidence = applyAgentControlPatch(result.controlPatch, requestContext);
           targetAssistant.content = result.content;
           targetAssistant.reasoning = result.reasoning ?? undefined;
           targetAssistant.tokenCount = tokenCountFor(result.content);
@@ -728,7 +767,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
           setMessages([...conversationRef.current]);
         } else {
           if (!response.ok) {
-            throw new Error(await extractAiErrorMessage(response));
+            throw new Error(await extractAiErrorMessage(response, t));
           }
           const payload = await response.json();
           const assistantText: string | undefined = payload?.choices?.[0]?.message?.content?.trim();
@@ -745,10 +784,11 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
         setError(message);
       } finally {
         setIsLoading(false);
+        setStreamingMessageId(null);
         requestInFlightRef.current = false;
       }
     },
-    [applyAgentControlPatch, runAgentModeTurn, systemPrompt, t],
+    [applyAgentControlPatch, captureRequestContext, runAgentModeTurn, systemPrompt, t],
   );
 
   const handleRegenerate = (message: AiChatMessage) => {
@@ -816,7 +856,9 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
   }, [appendWorksheetSelectionMessage, rawData]);
 
   useEffect(() => {
-    if (!hasInitialized) {
+    if (!hasInitialized && !initializationStartedRef.current) {
+      // StrictMode replays this effect before its state update; reserve initialization synchronously.
+      initializationStartedRef.current = true;
       if (rawData && datasetSummary) {
         if (rawData.sheets && rawData.sheets.length > 1 && selectedAiSheetIndex === null) {
           const welcomeMessage: AiChatMessage = {
@@ -910,10 +952,12 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
   }, [appendAssistantMessage, hasInitialized, rawData, t]);
 
   useEffect(() => {
-    if (!scrollContainerRef.current) {
+    const container = scrollContainerRef.current;
+    // Do not yank the view back down while the reader has scrolled up to re-read something.
+    if (!container || !stickToBottomRef.current) {
       return;
     }
-    scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    container.scrollTop = container.scrollHeight;
   }, [messages]);
 
   useEffect(() => {
@@ -997,6 +1041,20 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
     });
   }, [agentModeEnabled, messages]);
 
+  const lastVisibleMessageId = visibleMessages[visibleMessages.length - 1]?.id;
+  const latestEvidenceId = useMemo(() => {
+    for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
+      if (visibleMessages[index].configEvidence) return visibleMessages[index].id;
+    }
+    return null;
+  }, [visibleMessages]);
+
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    stickToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < STICK_TO_BOTTOM_PX;
+  };
+
   return (
     <div className="mt-4 overflow-hidden rounded-2xl border border-teal-100 bg-white shadow-inner" dir={language === 'he' ? 'rtl' : 'ltr'}>
       <div className="flex items-start justify-between border-b border-teal-100 bg-teal-50/60 px-4 py-3">
@@ -1010,7 +1068,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
         <button
           type="button"
           onClick={onClose}
-          className="text-gray-400 transition hover:text-gray-600"
+          className="rounded-md p-1 text-gray-500 transition hover:text-gray-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-600"
           aria-label={t('ai.close')}
         >
           <X className="h-4 w-4" aria-hidden="true" />
@@ -1018,33 +1076,41 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
       </div>
 
       {error && (
-        <div className="border-b border-red-100 bg-red-50 px-4 py-2 text-xs text-red-700">
+        <div role="alert" className="border-b border-red-100 bg-red-50 px-4 py-2 text-xs text-red-700">
           {error}
         </div>
       )}
 
       {agentFeedback && (
-        <div className="border-b border-teal-100 bg-teal-50 px-4 py-2 text-xs text-teal-700">
+        <div role="status" className="border-b border-teal-100 bg-teal-50 px-4 py-2 text-xs text-teal-800">
           {agentFeedback}
         </div>
       )}
 
-      <div ref={scrollContainerRef} className="max-h-80 space-y-3 overflow-y-auto px-4 py-4 text-sm">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-label={t('ai.conversation')}
+        tabIndex={0}
+        className="assistant-log max-h-[min(34rem,65vh)] min-h-[10rem] space-y-3 overflow-y-auto px-4 py-4 text-sm"
+      >
         {visibleMessages.map((message) => {
           const isAssistant = message.role === 'assistant';
           const hasAttachment = Boolean(message.attachment);
           const hasWorksheetOptions = Boolean(message.worksheetOptions?.length);
+          const isStreaming = isLoading && isAssistant && (streamingMessageId === message.id || (streamingMessageId === null && message.id === lastVisibleMessageId));
           const bubbleBase = isAssistant
             ? 'bg-teal-50 text-gray-700 ring-1 ring-inset ring-teal-100 rounded-bl-none'
             : 'bg-teal-600 text-white rounded-br-none';
-          const bubblePadding = isAssistant
-            ? 'px-3 py-2 pb-7'
-            : hasAttachment
-              ? 'p-3'
-              : 'px-3 py-2 pb-7';
-          const bubbleWhitespace = isAssistant ? 'whitespace-normal' : hasAttachment ? 'whitespace-normal' : 'whitespace-pre-wrap';
-          const actionColor = isAssistant ? 'text-teal-700/70 hover:text-teal-700' : 'text-white/80 hover:text-white';
-          const metricColor = isAssistant ? 'text-teal-700/60' : 'text-white/80';
+          const bubblePadding = hasAttachment && !isAssistant ? 'p-3' : 'px-3 py-2';
+          const bubbleWhitespace = isAssistant || hasAttachment ? 'whitespace-normal' : 'whitespace-pre-wrap';
+          const actionColor = isAssistant
+            ? 'text-teal-700 hover:bg-teal-100 hover:text-teal-900'
+            : 'text-white/90 hover:bg-white/15 hover:text-white';
+          const metricColor = isAssistant ? 'text-teal-800' : 'text-white/90';
           const attachmentMetaParts: string[] = [];
           if (message.attachment?.type) {
             attachmentMetaParts.push(message.attachment.type.toUpperCase());
@@ -1056,12 +1122,13 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
           }
           const attachmentMeta = attachmentMetaParts.join(' · ');
           const showEdit = !isAssistant && !message.autoGenerated && !hasAttachment;
-          const visibleAssistantContent = message.content;
+          const wideAssistant = isAssistant && (Boolean(message.configEvidence) || message.content.includes('```html'));
+          const actionButton = `rounded-md p-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-current disabled:opacity-50 ${actionColor}`;
           return (
             <div key={message.id} className={`flex ${isAssistant ? 'justify-start' : 'justify-end'}`}>
-              <div className="relative group max-w-[90%]">
+              <div className={`min-w-0 ${isAssistant ? (wideAssistant ? 'w-[min(100%,44rem)]' : 'max-w-[92%]') : 'max-w-[85%]'}`}>
                 <div
-                  className={`relative rounded-2xl ${bubblePadding} shadow-sm ${bubbleBase} ${bubbleWhitespace}`}
+                  className={`relative rounded-2xl ${bubblePadding} shadow-xs ${bubbleBase} ${bubbleWhitespace}`}
                 >
                   {isAssistant ? (
                     <>
@@ -1077,7 +1144,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
                           </ChainOfThoughtContent>
                         </ChainOfThought>
                       )}
-                      <MarkdownText text={visibleAssistantContent} />
+                      <AssistantMessageContent text={message.content} streaming={isStreaming} />
                       {hasWorksheetOptions && (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {message.worksheetOptions?.map((option) => (
@@ -1085,12 +1152,19 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
                               key={`${message.id}-${option.index}`}
                               type="button"
                               onClick={() => handleWorksheetSelect(option.index)}
-                              className="rounded-full border border-teal-300 bg-white px-3 py-1 text-xs font-medium text-teal-700 transition hover:bg-teal-50"
+                              className="rounded-full border border-teal-300 bg-white px-3 py-1 text-xs font-medium text-teal-700 transition hover:bg-teal-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-600"
                             >
                               {option.name} ({option.rows} {t('fileUpload.rows')}, {option.columns} {t('fileUpload.columns')})
                             </button>
                           ))}
                         </div>
+                      )}
+                      {message.configEvidence && (
+                        <AgentConfigEvidenceView
+                          evidence={message.configEvidence}
+                          current={currentConfig}
+                          defaultOpen={message.id === latestEvidenceId}
+                        />
                       )}
                     </>
                   ) : hasAttachment ? (
@@ -1101,7 +1175,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
                       <div className="min-w-0">
                         <p className="text-sm font-semibold truncate">{message.attachment?.name}</p>
                         {attachmentMeta && (
-                          <p className="text-xs text-white/80">{attachmentMeta}</p>
+                          <p className="text-xs text-white/90">{attachmentMeta}</p>
                         )}
                       </div>
                       <span className="sr-only">{message.content}</span>
@@ -1110,59 +1184,64 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
                     message.content
                   )}
 
-                  {isAssistant ? (
-                    <div className="pointer-events-none absolute inset-x-2 bottom-1 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity">
-                      <div className="pointer-events-auto flex items-center gap-1">
+                  {isAssistant && !isStreaming ? (
+                    <div className="mt-2 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-0.5">
                         <button
                           type="button"
-                          className={`p-1 rounded-md transition-colors ${actionColor}`}
+                          className={actionButton}
                           onClick={() => handleRegenerate(message)}
+                          disabled={isLoading || !message.parentUserId}
                           aria-label={t('ai.regenerate')}
+                          title={t('ai.regenerate')}
                         >
-                          <RefreshCcw size={14} />
+                          <RefreshCcw size={14} aria-hidden="true" />
                         </button>
                         <button
                           type="button"
-                          className={`p-1 rounded-md transition-colors ${actionColor}`}
-                          onClick={() => handleCopy(message.content)}
-                          aria-label={t('ai.copy')}
+                          className={actionButton}
+                          onClick={() => handleCopy(message.id, message.content)}
+                          aria-label={copiedId === message.id ? t('ai.copied') : t('ai.copy')}
+                          title={copiedId === message.id ? t('ai.copied') : t('ai.copy')}
                         >
-                          <Copy size={14} />
+                          {copiedId === message.id ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
                         </button>
                         <button
                           type="button"
-                          className={`p-1 rounded-md transition-colors ${actionColor}`}
+                          className={actionButton}
                           onClick={() => handleDownload(message.content)}
                           aria-label={t('ai.download')}
+                          title={t('ai.download')}
                         >
-                          <Download size={14} />
+                          <Download size={14} aria-hidden="true" />
                         </button>
                       </div>
-                      <div className={`flex items-center gap-3 text-[11px] ${metricColor}`}>
-                        <span className="flex items-center gap-1">
-                          <Hash size={12} />
-                          {message.tokenCount ?? '—'}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Clock size={12} />
-                          {message.responseTimeMs !== undefined
-                            ? `${(message.responseTimeMs / 1000).toFixed(2)}s`
-                            : '—'}
-                        </span>
-                      </div>
+                      {(message.tokenCount !== undefined || message.responseTimeMs !== undefined) && (
+                        <div className={`flex items-center gap-3 text-[11px] tabular-nums ${metricColor}`}>
+                          <span className="flex items-center gap-1">
+                            <Hash size={12} aria-hidden="true" />
+                            {message.tokenCount ?? '—'}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Clock size={12} aria-hidden="true" />
+                            {message.responseTimeMs !== undefined
+                              ? `${(message.responseTimeMs / 1000).toFixed(2)}s`
+                              : '—'}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   ) : showEdit ? (
-                    <div className="pointer-events-none absolute inset-x-2 bottom-1 flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                      <div className="pointer-events-auto">
-                        <button
-                          type="button"
-                          className={`p-1 rounded-md transition-colors ${actionColor}`}
-                          onClick={() => handleEditClick(message)}
-                          aria-label={t('ai.edit')}
-                        >
-                          <Edit3 size={14} />
-                        </button>
-                      </div>
+                    <div className="mt-1 flex items-center justify-end">
+                      <button
+                        type="button"
+                        className={actionButton}
+                        onClick={() => handleEditClick(message)}
+                        aria-label={t('ai.edit')}
+                        title={t('ai.edit')}
+                      >
+                        <Edit3 size={14} aria-hidden="true" />
+                      </button>
                     </div>
                   ) : null}
                 </div>
@@ -1172,7 +1251,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
         })}
 
         {isLoading && (
-          <div className="flex items-center gap-2 text-teal-600">
+          <div role="status" className="flex items-center gap-2 text-teal-700">
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
             <span>{t('ai.thinking')}</span>
           </div>
@@ -1219,7 +1298,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
         </label>
         <textarea
           id="ai-message"
-          className="h-20 w-full resize-none rounded-xl border border-teal-100 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+          className="h-20 w-full resize-none rounded-xl border border-teal-100 bg-white px-3 py-2 text-sm text-gray-700 shadow-xs focus:border-teal-500 focus:outline-hidden focus:ring-2 focus:ring-teal-200"
           placeholder={t('ai.placeholder')}
           value={inputValue}
           onChange={(event) => setInputValue(event.target.value)}
@@ -1240,9 +1319,9 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
               setAgentFeedback(null);
             }}
             aria-pressed={agentModeEnabled}
-            title={agentModeEnabled ? t('ai.agentModeOn') : 'Agent mode: Off'}
+            title={agentModeEnabled ? t('ai.agentModeOn') : t('ai.agentModeOff')}
           >
-            <Sparkles className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+            <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <AnimatePresence initial={false}>
               {agentModeEnabled && (
                 <motion.span
@@ -1250,7 +1329,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
                   animate={{ width: 'auto', opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
                   transition={{ duration: 0.15, ease: 'easeInOut' }}
-                  className="text-[11px] font-medium overflow-hidden whitespace-nowrap flex-shrink-0"
+                  className="text-[11px] font-medium overflow-hidden whitespace-nowrap shrink-0"
                 >
                   {t('ai.agentModeOn')}
                 </motion.span>
@@ -1270,7 +1349,7 @@ const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({ onClose }) => {
             <span>{isLoading ? t('ai.sending') : t('ai.send')}</span>
           </button>
         </div>
-        <p className="mt-1 text-right text-[11px] text-teal-700/80">{t('ai.agentHint')}</p>
+        <p className="mt-1 text-end text-[11px] text-teal-800">{t('ai.agentHint')}</p>
       </form>
     </div>
   );

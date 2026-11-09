@@ -186,7 +186,7 @@ export const ChainOfThoughtContent = memo(
         <CollapsibleContent
           className={cn(
             "mt-2 space-y-3",
-            "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-oklch(0.145 0 0) outline-none data-[state=closed]:animate-out data-[state=open]:animate-in dark:text-oklch(0.985 0 0)",
+            "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-oklch(0.145 0 0) outline-hidden data-[state=closed]:animate-out data-[state=open]:animate-in dark:text-oklch(0.985 0 0)",
             className
           )}
           {...props}

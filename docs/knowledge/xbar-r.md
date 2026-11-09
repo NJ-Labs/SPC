@@ -35,9 +35,15 @@ Control Limits
   - LCL_R = D3 · \bar{R}
 
 Sigma Estimate
-- A compatible estimate of process sigma is \sigma ≈ \bar{R} / d2.
+- Within-process sigma: \sigma ≈ \bar{R} / d2 (the app reports it as processSigma, method "R-bar/d2"). Cp/Cpk use it.
+- The X-bar chart plots means, so its own sigma is the standard error \sigma / sqrt(n). A2 · \bar{R} equals 3 · \sigma / sqrt(n).
+  Do not quote the standard error as the process sigma.
 
 Notes
 - Use subgroup means as X-bar chart points; use R_i as R chart points.
 - For small n where D3 is 0, LCL_R = 0.
+- In the app, several Y columns mean each row is one subgroup and n = number of Y columns; one Y column means consecutive rows form subgroups of size n.
+- The app runs the active rule set on the X-bar chart and only test 1 (beyond limits) on the R chart.
+- Read the R chart first: if within-subgroup spread is unstable, the X-bar limits (built from R̄) are not trustworthy.
+- Rational subgroups should contain only common-cause variation (same time, setup, and material). Mixing streams inside a subgroup inflates R̄ and hides shifts.
 

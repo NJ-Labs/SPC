@@ -35,9 +35,13 @@ Control Limits
   - LCL_S = B3 · \bar{s}
 
 Sigma Estimate
-- A compatible estimate of process sigma is \sigma ≈ \bar{s} / c4.
+- Within-process sigma: \sigma ≈ \bar{s} / c4 (the app reports it as processSigma, method "S-bar/c4"). Cp/Cpk use it.
+- The X-bar chart plots means, so its own sigma is the standard error \sigma / sqrt(n). Do not quote it as the process sigma.
 
 Notes
 - Use subgroup means as X-bar chart points; use s_i as S chart points.
 - If B3 is 0 for small n, LCL_S is clamped at 0 (as per constants table).
+- In the app, several Y columns mean each row is one subgroup and n = number of Y columns; one Y column means consecutive rows form subgroups of size n.
+- The app runs the active rule set on the X-bar chart and only test 1 (beyond limits) on the S chart.
+- Read the S chart first: unstable within-subgroup spread makes the X-bar limits untrustworthy.
 

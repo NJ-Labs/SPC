@@ -33,7 +33,11 @@ export interface ControlLimits {
   ucl: number;       // Upper Control Limit
   lcl: number;       // Lower Control Limit
   centerLine: number; // Center Line (usually the mean)
-  sigma: number;     // Process standard deviation
+  sigma: number;     // Standard deviation of the plotted statistic (X-bar: standard error)
+  processSigma?: number; // Within-process estimate for individual observations
+  sigmaMethod?: string; // Method used to estimate processSigma
+  capabilityValues?: number[]; // Raw observations used in the estimate, excluding incomplete subgroups
+  variationChart?: { ucl: number; lcl: number; centerLine: number; sigma: number; chartValues: number[] };
   uclSeries?: number[]; // Pointwise upper limits for variable-denominator charts
   lclSeries?: number[]; // Pointwise lower limits for variable-denominator charts
   sigmaSeries?: number[]; // Pointwise sigma for zones and diagnostics
@@ -51,11 +55,27 @@ export interface ControlLimits {
   };
 }
 
+export type RuleSet = 'nelson' | 'westernElectric';
+
+export interface RuleSignal {
+  windowStart: number; // Inclusive, zero-based indices in the charted series
+  windowEnd: number;
+  signalIndex: number; // Endpoint at which the window is evaluated
+  participatingIndices: number[];
+}
+
 export interface RuleViolation {
   index: number;
   pointValue: number;
   ruleNumber: number;
   description: string;
+  ruleSet?: RuleSet;
+  windowStart?: number;
+  windowEnd?: number;
+  signalIndex?: number;
+  participatingIndices?: number[];
+  signals?: RuleSignal[]; // Bounded preview of overlapping windows involving this point
+  signalCount?: number; // Windows attributed to their last participant; sum by rule for the exact total
 }
 
 export interface Statistics {
@@ -123,12 +143,14 @@ export interface CapabilityStatus {
   readiness: CapabilityReadiness;
   indices: CapabilityIndices;
   reasons: string[];
+  sigmaEstimate?: { within: number; overall: number; method?: string; observationCount: number };
 }
 
 export interface ProcessedData {
   data: DataPoint[];
   controlLimits: ControlLimits;
   ruleViolations: RuleViolation[];
+  variationRuleViolations?: RuleViolation[]; // MR/R/S chart limit signals, indexed by chart point
   statistics: Statistics;
   dataProfile?: DataProfile;
   diagnostics?: SpcDiagnostic[];
@@ -146,6 +168,7 @@ export interface ChartOptions {
   showControlLimits: boolean;
   showCenterLine: boolean;
   showRuleViolations: boolean;
+  ruleSet?: RuleSet; // Defaults to Nelson for compatibility with existing rule IDs
   colorScheme: string;
   showSigma1?: boolean;
   showSigma2?: boolean;

@@ -47,6 +47,89 @@ export interface AiWorksheetOption {
   columns: number;
 }
 
+export type AgentConfigField =
+  | 'chartType'
+  | 'yColumns'
+  | 'xAxisColumn'
+  | 'denominatorColumn'
+  | 'sampleSize'
+  | 'chartLabel'
+  | 'zAxisLabel'
+  | 'yAxisLabel'
+  | 'showControlLimits'
+  | 'showCenterLine'
+  | 'showRuleViolations'
+  | 'showSigma1'
+  | 'showSigma2'
+  | 'showSigma3'
+  | 'colorScheme'
+  | 'ruleSet';
+
+export type AgentConfigValue = string | number | boolean | null | string[];
+
+export type AgentConfigChangeStatus = 'applied' | 'unchanged' | 'rejected';
+
+export type AgentConfigRejectReason =
+  | 'unknownChartType'
+  | 'unknownColumn'
+  | 'noValidColumns'
+  | 'unknownRuleSet'
+  | 'invalidValue'
+  | 'staleDataset'
+  /** The setting changed while the request ran and the proposal differs, so the current value was kept. */
+  | 'editedDuringRequest'
+  /** A chart type / Y column / sample setting it depends on changed while the request ran. */
+  | 'dependsOnEditedSetting';
+
+export type AgentConfigNoteCode = 'clamped' | 'lockedToYColumns' | 'ignoredColumns';
+
+export interface AgentConfigChange {
+  field: AgentConfigField;
+  status: AgentConfigChangeStatus;
+  /** Value in the app immediately before the patch was resolved. */
+  before: AgentConfigValue;
+  /** Value in the app after the patch; equals `before` unless status is `applied`. */
+  after: AgentConfigValue;
+  /** What the assistant asked for, kept only when it differs from `after`. */
+  requested?: AgentConfigValue;
+  reason?: AgentConfigRejectReason;
+  note?: AgentConfigNoteCode;
+  /** Column names (`unknownColumn`, `ignoredColumns`) or the settings that changed (`dependsOnEditedSetting`). */
+  detail?: string[];
+}
+
+/**
+ * A refusal reported by the gateway. It is only a reason: nothing here ever says something was
+ * applied, and the app never acted on it.
+ */
+export interface AgentServerRejection {
+  /** The app setting it concerned, when the gateway named one the app has. */
+  field?: AgentConfigField;
+  /** The gateway's own name for it, only when a short plain identifier; otherwise empty. */
+  name: string;
+  /** What the assistant asked for, bounded for display. */
+  requested?: AgentConfigValue;
+  /** The gateway's explanation, as sanitized and bounded plain text. */
+  message?: string;
+}
+
+export type AgentConfigOutcome = 'applied' | 'partial' | 'unchanged' | 'rejected' | 'none' | 'stale';
+
+/** Derived locally from the validated patch; never copied from the model's own claims. */
+export interface AgentConfigEvidence {
+  version: 1;
+  appliedAt: number;
+  outcome: AgentConfigOutcome;
+  /** Settings the app resolved itself, each with its real before/after value. */
+  changes: AgentConfigChange[];
+  /** `rejected` also counts `serverRejections`. */
+  counts: { applied: number; unchanged: number; rejected: number };
+  /** Refusals the gateway reported that the app did not resolve itself. */
+  serverRejections?: AgentServerRejection[];
+  /** The assistant's own rationale; shown as unverified. */
+  agentReason?: string;
+}
+
 export interface AiChatMessage {
   id: string;
   role: AiMessageRole;
@@ -61,6 +144,7 @@ export interface AiChatMessage {
   attachment?: AiChatAttachment;
   worksheetOptions?: AiWorksheetOption[];
   reasoning?: string;
+  configEvidence?: AgentConfigEvidence;
   toolCalls?: AiToolCall[];
   toolCallId?: string;
   hiddenFromTranscript?: boolean;

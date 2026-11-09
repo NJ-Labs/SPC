@@ -40,13 +40,10 @@ export const resolveAiRuntimeConfig = () => {
   const viteEnv = getViteEnv();
 
   const apiUrl = asNonEmptyString(runtimeConfig?.API_URL)
-    ?? asNonEmptyString(viteEnv?.AI_API_URL)
     ?? asNonEmptyString(viteEnv?.VITE_AI_API_URL);
   const apiKey = asNonEmptyString(runtimeConfig?.API_KEY)
-    ?? asNonEmptyString(viteEnv?.AI_API_KEY)
     ?? asNonEmptyString(viteEnv?.VITE_AI_API_KEY);
   const model = asNonEmptyString(runtimeConfig?.MODEL)
-    ?? asNonEmptyString(viteEnv?.AI_MODEL)
     ?? asNonEmptyString(viteEnv?.VITE_AI_MODEL);
 
   return {

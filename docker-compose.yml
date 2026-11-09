@@ -9,6 +9,9 @@ services:
         PIP_TRUSTED_HOST: ${DSPY_PIP_TRUSTED_HOST:-}
     environment:
       AI_API_KEY: ${AI_API_KEY:-}
+      AI_API_URL: ${AI_API_URL:-}
+      AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+      DSPY_GATEWAY_API_KEY: ${DSPY_GATEWAY_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
       AI_PROVIDER: ${AI_PROVIDER:-}
       AI_API_BASE: ${AI_API_BASE:-}
@@ -20,13 +23,19 @@ services:
       DSPY_TEMPERATURE: ${DSPY_TEMPERATURE:-0}
       DSPY_MAX_TOKENS: ${DSPY_MAX_TOKENS:-220}
       DSPY_TIMEOUT_SECONDS: ${DSPY_TIMEOUT_SECONDS:-20}
+      DSPY_AGENT_MAX_ITERS: ${DSPY_AGENT_MAX_ITERS:-5}
+      DSPY_AGENT_DEADLINE_SECONDS: ${DSPY_AGENT_DEADLINE_SECONDS:-90}
+      DSPY_AGENT_MAX_TOKENS: ${DSPY_AGENT_MAX_TOKENS:-1024}
+      DSPY_HTML_MAX_TOKENS: ${DSPY_HTML_MAX_TOKENS:-3000}
+      DSPY_MAX_REQUEST_CHARS: ${DSPY_MAX_REQUEST_CHARS:-16000}
+      DSPY_JSON_ADAPTER_FALLBACK: ${DSPY_JSON_ADAPTER_FALLBACK:-false}
+      REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
+      SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       AI_GATEWAY_PORT: "8080"
       DSPY_GATEWAY_RELOAD: "false"
       SPC_WEB_DIST_DIR: /app/spc-web-dist
     ports:
       - "8080:8080"
-    volumes:
-      - ./deploy/docker/runtime-config.compose.js:/app/spc-web-dist/config/runtime-config.js:ro
     healthcheck:
       test:
         [

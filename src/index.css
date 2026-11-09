@@ -1,14 +1,160 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss" source("../src");
+@source "../index.html";
+
+/* Pinned to the Tailwind v3 palette, sans stack and fixed line-heights so the UI looks exactly as before the v4 migration. Remove to adopt the v4 defaults. */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --text-xs--line-height: 1rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl--line-height: 2.5rem;
+
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+  --color-slate-950: #020617;
+
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+  --color-gray-950: #030712;
+
+  --color-red-50: #fef2f2;
+  --color-red-100: #fee2e2;
+  --color-red-200: #fecaca;
+  --color-red-300: #fca5a5;
+  --color-red-400: #f87171;
+  --color-red-500: #ef4444;
+  --color-red-600: #dc2626;
+  --color-red-700: #b91c1c;
+  --color-red-800: #991b1b;
+  --color-red-900: #7f1d1d;
+  --color-red-950: #450a0a;
+
+  --color-amber-50: #fffbeb;
+  --color-amber-100: #fef3c7;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+  --color-amber-800: #92400e;
+  --color-amber-900: #78350f;
+  --color-amber-950: #451a03;
+
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #a7f3d0;
+  --color-emerald-300: #6ee7b7;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+  --color-emerald-800: #065f46;
+  --color-emerald-900: #064e3b;
+  --color-emerald-950: #022c22;
+
+  --color-teal-50: #f0fdfa;
+  --color-teal-100: #ccfbf1;
+  --color-teal-200: #99f6e4;
+  --color-teal-300: #5eead4;
+  --color-teal-400: #2dd4bf;
+  --color-teal-500: #14b8a6;
+  --color-teal-600: #0d9488;
+  --color-teal-700: #0f766e;
+  --color-teal-800: #115e59;
+  --color-teal-900: #134e4a;
+  --color-teal-950: #042f2e;
+
+  --color-blue-50: #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-300: #93c5fd;
+  --color-blue-400: #60a5fa;
+  --color-blue-500: #3b82f6;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+  --color-blue-800: #1e40af;
+  --color-blue-900: #1e3a8a;
+  --color-blue-950: #172554;
+
+  --color-green-50: #f0fdf4;
+  --color-green-100: #dcfce7;
+  --color-green-200: #bbf7d0;
+  --color-green-300: #86efac;
+  --color-green-400: #4ade80;
+  --color-green-500: #22c55e;
+  --color-green-600: #16a34a;
+  --color-green-700: #15803d;
+  --color-green-800: #166534;
+  --color-green-900: #14532d;
+  --color-green-950: #052e16;
+
+  --color-purple-50: #faf5ff;
+  --color-purple-100: #f3e8ff;
+  --color-purple-200: #e9d5ff;
+  --color-purple-300: #d8b4fe;
+  --color-purple-400: #c084fc;
+  --color-purple-500: #a855f7;
+  --color-purple-600: #9333ea;
+  --color-purple-700: #7e22ce;
+  --color-purple-800: #6b21a8;
+  --color-purple-900: #581c87;
+  --color-purple-950: #3b0764;
+}
+
+@layer base {
+  /* v4 preflight dropped these v3 defaults. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-gray-400);
+  }
+
+  /* Restore the browser defaults v3 left alone (v4 preflight forces transparent backgrounds, opacity 1 and zero padding). */
+  input,
+  select,
+  textarea {
+    background-color: revert;
+    opacity: revert;
+  }
+
+  th,
+  td {
+    padding: 1px;
+  }
+
+  option {
+    padding: revert;
+  }
+}
 
 /* RTL Support for Hebrew */
 [dir="rtl"] {
   direction: rtl;
-}
-
-[dir="rtl"] .rtl\:space-x-reverse > :not([hidden]) ~ :not([hidden]) {
-  --tw-space-x-reverse: 1;
 }
 
 /* Print Styling for A4 formal layout */
@@ -145,8 +291,10 @@
   line-height: 1.5;
   white-space: normal; /* allow wrapping */
 }
-.markdown-body p { margin: 0.25rem 0; }
-.markdown-body .mkd-br { height: 0.25rem; }
+.markdown-body p { margin: 0.4rem 0; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body .mkd-br { height: 0.2rem; }
 .markdown-body a { color: #0f766e; text-decoration: underline; }
 .markdown-body strong { font-weight: 600; }
 .markdown-body em { font-style: italic; }
@@ -165,16 +313,31 @@
 .markdown-body .mkd-code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 0.9em; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 {
   font-weight: 600;
-  margin: 0.25rem 0 0.15rem;
+  margin: 0.65rem 0 0.2rem;
+  line-height: 1.3;
 }
 .markdown-body h1 { font-size: 1.15rem; }
 .markdown-body h2 { font-size: 1.075rem; }
 .markdown-body h3 { font-size: 1.025rem; }
-.markdown-body ul.mkd-ul, .markdown-body ol.mkd-ol { margin: 0.25rem 0 0.25rem 1.25rem; }
-.markdown-body li { margin: 0.1rem 0; }
+.markdown-body ul.mkd-ul, .markdown-body ol.mkd-ol { margin: 0.35rem 0; padding-inline-start: 1.25rem; }
+.markdown-body ul.mkd-ul { list-style: disc; }
+.markdown-body ol.mkd-ol { list-style: decimal; }
+.markdown-body li { margin: 0.15rem 0; }
+.markdown-body li::marker { color: #0f766e; }
 .markdown-body .mkd-math-block { margin: 0.25rem 0; }
-.markdown-body .mkd-table-wrap { overflow-x: auto; margin: 0.25rem 0; }
-.markdown-body table.mkd-table { border-collapse: collapse; width: 100%; font-size: 0.95em; }
+.markdown-body .mkd-table-wrap { overflow-x: auto; margin: 0.35rem 0; }
+.markdown-body table.mkd-table { border-collapse: collapse; width: 100%; font-size: 0.95em; font-variant-numeric: tabular-nums; }
 .markdown-body table.mkd-table th,
 .markdown-body table.mkd-table td { border: 1px solid rgba(13, 148, 136, 0.25); padding: 0.25rem 0.5rem; vertical-align: top; }
 .markdown-body table.mkd-table thead th { background: rgba(13, 148, 136, 0.08); font-weight: 600; }
+
+/* Assistant transcript: browser surfaces themed to the app palette */
+.assistant-log { scrollbar-width: thin; scrollbar-color: rgba(13, 148, 136, 0.45) transparent; overscroll-behavior: contain; }
+.assistant-log:focus-visible { outline: 2px solid #0d9488; outline-offset: -2px; }
+.assistant-log ::selection { background: rgba(20, 184, 166, 0.28); }
+.assistant-log pre.mkd-pre { white-space: pre; }
+.assistant-log pre.mkd-pre:focus-visible { outline: 2px solid #0d9488; outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rainbow-button { animation: none; }
+}

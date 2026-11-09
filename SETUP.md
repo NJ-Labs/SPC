@@ -1,492 +1,94 @@
-# SPC Analysis Tool - Setup Guide
+# SPC setup
 
-This document provides comprehensive instructions for setting up the SPC Analysis Tool development environment.
+Use Node.js **24 LTS** (22.13+ and 26+ are also supported), npm, and [uv](https://docs.astral.sh/uv/getting-started/installation/). uv downloads Python 3.12 when needed. The project uses `package-lock.json` and npm for local development and Docker builds.
 
-## Table of Contents
+## Quick start on Windows
 
-1. [Quick Start](#quick-start)
-2. [System Requirements](#system-requirements)
-3. [Installation Steps](#installation-steps)
-4. [Development Workflow](#development-workflow)
-5. [Docker Setup](#docker-setup)
-6. [Kubernetes Deployment](#kubernetes-deployment)
-7. [Troubleshooting](#troubleshooting)
-
-## Quick Start
-
-### Windows (PowerShell)
+Install Node.js from https://nodejs.org/ and install uv once:
 
 ```powershell
-# Basic setup
-.\setup.ps1
-
-# Setup with Docker build
-.\setup.ps1 -Docker
-
-# Force reinstall dependencies
-.\setup.ps1 -Force
+winget install --id astral-sh.uv -e
 ```
 
-### macOS/Linux (Bash)
-
-```bash
-# Make script executable (first time only)
-chmod +x setup.sh
-
-# Basic setup
-./setup.sh
-
-# Setup with Docker build
-./setup.sh --docker
-
-# Force reinstall dependencies
-./setup.sh --force
-```
-
-## System Requirements
-
-### Minimum Requirements
-
-- **Node.js**: Version 18 or higher
-- **Package Manager**: pnpm (managed via corepack)
-- **RAM**: 2GB minimum for development
-- **Disk Space**: 500MB for node_modules and build artifacts
-
-### Recommended Requirements
-
-- **Node.js**: Version 20 LTS or higher
-- **RAM**: 4GB or more for comfortable development
-- **Git**: For version control
-
-### Optional Requirements
-
-- **Docker**: For containerized deployment and testing
-- **Kubernetes**: For production deployment (requires Helm)
-- **Helm**: For Kubernetes package management
-
-## Installation Steps
-
-### Step 1: Install Node.js
-
-#### Windows
-
-1. Visit https://nodejs.org/
-2. Download the LTS version (20+)
-3. Run the installer and follow the prompts
-4. Verify installation:
-   ```powershell
-   node --version
-   npm --version
-   ```
-
-#### macOS
-
-Using Homebrew:
-```bash
-brew install node
-node --version
-```
-
-Or download from https://nodejs.org/
-
-#### Linux (Ubuntu/Debian)
-
-```bash
-sudo apt-get update
-sudo apt-get install nodejs npm
-node --version
-```
-
-Or using NodeSource:
-```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-```
-
-### Step 2: Clone Repository
-
-```bash
-git clone https://github.com/NaveDanan/SPC.git
-cd SPC
-```
-
-### Step 3: Run Setup Script
-
-#### Windows (PowerShell)
+Reopen PowerShell so the updated PATH is available, then:
 
 ```powershell
-# Allow script execution if needed
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-.\setup.ps1
+cd D:\Projects\SPC
+npm install
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
 ```
 
-#### macOS/Linux
+Set these three values in `.env`:
 
-```bash
-chmod +x setup.sh
-./setup.sh
+```dotenv
+AI_API_KEY=your-key
+AI_API_URL=https://your-model-server/v1
+AI_MODEL=your-model-id
 ```
 
-### Step 4: Manual Setup (Alternative)
+`AI_API_URL` is the upstream model server, not the SPC gateway. A server URL, `/v1` base, or full `/v1/chat/completions` URL works. Use the model ID exactly as the server lists it. Additional parameters in `.env.example` are optional. The project-root `.env` takes priority over an older `services/dspy-gateway/.env`; use `SPC_ENV_FILE` only when intentionally selecting a different file.
 
-If you prefer to set up manually:
-
-```bash
-# Enable corepack (manages pnpm)
-corepack enable
-
-# Install dependencies
-pnpm install --frozen-lockfile
-
-# Verify build
-pnpm build
-
-# Run linter
-pnpm lint
-```
-
-## Development Workflow
-
-### Available Commands
-
-```bash
-# Start development server (with hot reload)
-pnpm dev
-
-# Build for production
-pnpm build
-
-# Preview production build locally
-pnpm preview
-
-# Run ESLint
-pnpm lint
-
-# Format code (if prettier is configured)
-pnpm format
-```
-
-### Development Server
-
-After running `pnpm dev`, open your browser to the URL shown in the terminal (typically `http://localhost:5173`).
-
-The application will automatically reload when you make changes to the source files.
-
-### AI Assistant: Streaming + Markdown/LaTeX
-
-- Configure runtime AI settings in `public/config/runtime-config.js` (or Helm `config.data.runtime-config.js`):
-
-```js
-window.APP_CONFIG = {
-  ENV: "offline",
-  FEATURES: {},
-  AI: {
-    API_URL: "",
-    API_KEY: "",
-    MODEL: "",
-  },
-};
-```
-- The chat now streams responses when the provider supports `POST /v1/chat/completions` with `stream: true` (OpenAI-compatible).
-- Assistant messages support basic Markdown (headings, lists, links, code blocks) and TeX math using `$...$` / `$$...$$`.
-- For more predictable and consistent responses, run the optional DSPy gateway (`services/dspy-gateway`) and set `AI_API_URL` in root `.env`.
-
-#### Optional DSPy Gateway (Consistency Mode)
+Start the app and gateway together:
 
 ```powershell
-cd services/dspy-gateway
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-# Edit root .env and set AI_API_URL / AI_API_KEY / AI_MODEL
-# Optional: AI_API_BASE (custom upstream URL), AI_GATEWAY_PORT (default: 8001)
-# If AI_MODEL is not provider-prefixed (e.g. openai/<MODEL_ID>), set AI_PROVIDER.
-python main.py
+npm run dev
 ```
 
-Then set front-end runtime config:
+The command installs the locked Python packages if needed, starts the gateway on `127.0.0.1:8001`, waits for it, and starts Vite on `http://localhost:5173`. **Ctrl+C stops both services.** An existing SPC gateway is reused and remains running when the frontend stops.
 
-```js
-window.APP_CONFIG = {
-  ENV: "local",
-  FEATURES: {},
-  AI: {
-    API_URL: "",
-    API_KEY: "",
-    MODEL: "",
-  },
-};
-```
+The upstream key stays in the gateway; the browser receives same-origin `/` as its API URL and a separate gateway token. Missing AI settings do not prevent local SPC calculations. Configure all three values to use chat.
 
-Restart `pnpm dev` after changing runtime config.
-- For high-quality math rendering, include KaTeX or MathJax via CDN in `index.html` (optional):
+For a reproducible full setup, run `./setup.ps1` instead. It runs `npm ci`, `uv sync --frozen`, typechecks, tests, and the build. `-Force` refreshes downloads without changing the lockfiles. `-Docker` also builds a local container.
 
-  KaTeX (recommended):
-  ```html
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-  ```
+## macOS / Linux
 
-  MathJax (alternative):
-  ```html
-  <script>
-    window.MathJax = { tex: { inlineMath: [['$','$']], displayMath: [['$$','$$']] } };
-  </script>
-  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-  ```
+Install Node.js 24 LTS. Install uv with `brew install uv` on macOS or follow uv's Linux installation instructions linked above. Then use the same `npm install` and `npm run dev` commands. `bash setup.sh` performs the full setup; `--force` and `--docker` match the PowerShell options.
 
-  Without these, LaTeX shows as plain text placeholders.
+## Development commands
 
-### Project Structure
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Gateway and frontend together, with hot reload |
+| `npm run dev:web` | Frontend only; requires an existing gateway for chat |
+| `npm run dev:gateway` | Gateway only, for troubleshooting |
+| `npm run dev -- --port 3000` | Use another frontend port |
+| `npm test` | Frontend unit and component tests |
+| `npm run test:gateway` | Offline Python gateway tests |
+| `npm run test:dev` | Real startup/proxy regression, with dummy credentials |
+| `npm run typecheck` | TypeScript checks |
+| `npm run build` | Production frontend build |
+| `npm run preview` | Preview the frontend build; start a gateway separately for chat |
+| `npm run lint` | ESLint |
+| `npm audit` | Check installed dependencies against current advisories |
 
-```
-src/
-├── components/
-│   ├── analysis/          # SPC analysis components
-│   ├── charts/            # Chart display and controls
-│   ├── layout/            # Main layout components
-│   └── upload/            # Data upload components
-├── context/               # React context for state management
-├── types/                 # TypeScript type definitions
-├── utils/                 # Utility functions
-│   ├── spcCalculations.ts # SPC calculation logic
-│   ├── fileUtils.ts       # File handling utilities
-│   └── westernElectricRules.ts # Rule detection logic
-├── App.tsx                # Main app component
-├── main.tsx               # Entry point
-└── index.css              # Global styles
-```
-
-## Docker Setup
-
-### Prerequisites
-
-- Docker 20.10+
-- Docker Compose (optional)
-
-### Build Docker Image
-
-```bash
-# Using setup script
-.\setup.ps1 -Docker        # Windows
-./setup.sh --docker        # macOS/Linux
-
-# Or manually
-docker build -t spc-analysis-tool:latest .
-```
-
-### Run Docker Container
-
-```bash
-# Run on port 8080
-docker run --rm -p 8080:80 spc-analysis-tool:latest
-
-# Run with custom port
-docker run --rm -p 3000:80 spc-analysis-tool:latest
-```
-
-Open http://localhost:8080 in your browser.
-
-### Optional: Enable CORS for static assets
-
-The container Nginx config includes permissive CORS headers that reflect the request `Origin` and answers `OPTIONS` preflight with 204. This lets you embed or fetch assets from other domains.
-
-- File: `deploy/docker/nginx.conf` (CORS section in the `server` block)
-- Headers added: `Access-Control-Allow-Origin`, `...-Methods`, `...-Headers`
-- Preflight: responds to `OPTIONS` with `204` and cache (`Max-Age: 86400`)
-
-To restrict allowed origins, replace the CORS origin logic with a whitelist:
-
-```
-map $http_origin $cors_origin {
-  default "";
-  ~^https?://(localhost:\\d+|app.example.com)$ $http_origin;
-}
-```
-
-If you prefer to disable CORS entirely for production, remove the CORS add_header and `OPTIONS` block from the same file and rebuild the image.
-
-### Docker Development
-
-For development with hot-reload through Docker:
-
-```bash
-docker run --rm \
-  -v $(pwd)/src:/app/src \
-  -p 5173:5173 \
-  node:20-alpine \
-  sh -c "cd /app && pnpm install && pnpm dev"
-```
-
-## Kubernetes Deployment
-
-### Prerequisites
-
-- Kubernetes cluster (1.24+)
-- kubectl configured to access your cluster
-- Helm 3.0+
-
-### Install with Helm
-
-```bash
-# Using default values
-helm upgrade --install spc-analysis-tool deploy/helm/spc-analysis-tool \
-  -n spc --create-namespace
-
-# Using production values
-helm upgrade --install spc-analysis-tool deploy/helm/spc-analysis-tool \
-  -n spc --create-namespace \
-  -f deploy/helm/spc-analysis-tool/prod-values.yaml
-
-# Custom values
-helm upgrade --install spc-analysis-tool deploy/helm/spc-analysis-tool \
-  -n spc --create-namespace \
-  -f deploy/helm/spc-analysis-tool/values.yaml \
-  --set image.tag=v1.0.0 \
-  --set ingress.enabled=true \
-  --set ingress.host=spc.example.com
-```
-
-### Verify Deployment
-
-```bash
-# Check deployment status
-kubectl get deployment -n spc
-kubectl get pods -n spc
-kubectl get svc -n spc
-
-# View logs
-kubectl logs -n spc -l app=spc-analysis-tool
-```
-
-### Uninstall
-
-```bash
-helm uninstall spc-analysis-tool -n spc
-```
+Tailwind **v4** runs through `@tailwindcss/vite`; `src/index.css` contains its theme and compatibility styles. No legacy Tailwind PostCSS configuration is needed. Browser support is Chrome 111+, Safari 16.4+, and Firefox 128+.
 
 ## Troubleshooting
 
-### Issue: "pnpm is not recognized"
+**`ECONNREFUSED 127.0.0.1:8001`**: use `npm run dev` to start both services. If running `dev:web`, start `dev:gateway` separately. Review any Python error shown before Vite starts. Set optional `AI_GATEWAY_PORT` in `.env` if 8001 is occupied, and restart the command; the Vite and gateway ports must differ.
 
-**Windows Solution:**
+**`uv` is not found**: install it and reopen the terminal. `npm install` installs frontend packages; uv manages the gateway's Python packages. `npm run dev:web` is available for frontend-only work.
+
+**Unsupported Node version**: use Node.js 24 LTS, 22.13+, or 26+. Older Node versions cannot run the updated Vite/Vitest toolchain; `.npmrc` rejects incompatible installations early.
+
+**Install scripts**: `package.json` explicitly approves the locked esbuild installer needed by Vite. Check new script warnings with `npm install-scripts ls` on npm 11. Review each newly introduced installer before approving it. Do not disable npm's script checks globally.
+
+**Windows `EPERM` / file in use**: stop all development servers and test watchers before reinstalling. Native Vite/Tailwind libraries remain locked while a Node process uses them; administrator access is not the normal fix.
+
+**Dependency repair**: use `npm ci` to restore the committed dependency tree. Avoid `npm audit fix --force`; major upgrades require compatibility checks. SheetJS is pinned to the patched official tarball in vendor/ because the xlsx package on the npm registry is an older release. The local copy avoids extra CDN access and corporate certificate failures during installation; its source, checksum, and license are recorded in vendor/README.md.
+
+**Invalid or expired API key**: the alert and chat reply identify this explicitly. Replace AI_API_KEY in the root .env file and retry; the gateway reloads the value on the next request. Model-permission failures are shown separately.
+
+**Corporate network / certificate failures**: Windows system-trusted certificates are included automatically, with TLS verification enabled. The repository/container corporate CA bundle is also detected automatically. follow the optional CA and Python index settings in `.env.example` and `services/dspy-gateway/README.md`. Keep TLS verification enabled. uv installation failures are shown directly in the startup terminal.
+
+**Browserslist data warning**: use `npx update-browserslist-db@latest` and review the lockfile change, then run the build. This is distinct from the gateway connection error.
+
+## Containers
+
 ```powershell
-# Enable corepack
-corepack enable
-
-# Clear npm cache
-npm cache clean --force
+docker compose up --build
 ```
 
-**macOS/Linux Solution:**
-```bash
-corepack enable
-corepack prepare pnpm@latest --activate
-```
+The combined image serves the frontend and gateway on `http://localhost:8080`. Build settings are in `Dockerfile` and `docker-compose.yml`; gateway setup is documented in [services/dspy-gateway/README.md](services/dspy-gateway/README.md). Helm deployment guidance remains in [README.md](README.md).
 
-### Issue: Node.js version incompatibility
-
-```bash
-# Check current version
-node --version
-
-# Using nvm (Node Version Manager)
-nvm install 20
-nvm use 20
-```
-
-### Issue: Build fails with memory error
-
-**Windows:**
-```powershell
-# Increase Node memory
-$env:NODE_OPTIONS = "--max-old-space-size=4096"
-pnpm build
-```
-
-**macOS/Linux:**
-```bash
-export NODE_OPTIONS="--max-old-space-size=4096"
-pnpm build
-```
-
-### Issue: Port already in use
-
-```bash
-# Development server (default 5173)
-pnpm dev -- --port 3000
-
-# Preview server (default 4173)
-pnpm preview -- --port 3001
-```
-
-### Issue: Dependencies not installing
-
-```bash
-# Clear pnpm cache
-pnpm store prune
-
-# Remove node_modules and lockfile
-rm -rf node_modules pnpm-lock.yaml
-
-# Reinstall
-pnpm install
-```
-
-### Issue: Docker build fails
-
-```bash
-# Clear Docker cache
-docker builder prune
-
-# Build without cache
-docker build --no-cache -t spc-analysis-tool:latest .
-```
-
-### Issue: ESLint errors
-
-```bash
-# Run linter with detailed output
-pnpm lint
-
-# Fix auto-fixable issues
-pnpm lint -- --fix
-```
-
-## Performance Tips
-
-### Development
-
-1. Use Node.js 20+ for better performance
-2. Keep node_modules on a local SSD for faster installs
-3. Use WSL2 on Windows for better file I/O performance
-4. Enable IDE caching features
-
-### Production Build
-
-1. The build output is in the `dist/` folder
-2. Use a CDN for serving static assets
-3. Enable gzip compression in your web server
-4. Consider HTTP/2 for better performance
-
-## Additional Resources
-
-- [React Documentation](https://react.dev)
-- [TypeScript Handbook](https://www.typescriptlang.org/docs/)
-- [Vite Documentation](https://vitejs.dev)
-- [Chart.js Documentation](https://www.chartjs.org)
-- [Tailwind CSS Documentation](https://tailwindcss.com)
-- [pnpm Documentation](https://pnpm.io)
-
-## Support
-
-For issues or questions:
-1. Check the troubleshooting section above
-2. Review the project README.md
-3. Check existing GitHub issues
-4. Create a new GitHub issue with detailed information
-
-## License
-
-This project is provided as-is. See LICENSE file for details.
+For MMEMS cluster deployment, follow the `mmems-cluster-images` policy: push a unique image tag to Artifactory first and use `nave-pull-secret`; never import images into nodes manually.

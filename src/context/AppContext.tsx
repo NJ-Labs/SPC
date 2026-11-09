@@ -71,6 +71,8 @@ export const AppContextProvider: React.FC<{ children: ReactNode }> = ({ children
   useEffect(() => {
     if (rawData && selectedColumns.length > 0) {
       processData();
+    } else {
+      setProcessedData(null);
     }
   }, [
     rawData,
@@ -83,6 +85,7 @@ export const AppContextProvider: React.FC<{ children: ReactNode }> = ({ children
     chartOptions.lowerSpecLimit,
     chartOptions.upperSpecLimit,
     chartOptions.targetValue,
+    chartOptions.ruleSet,
   ]);
 
   useEffect(() => {
@@ -115,9 +118,6 @@ export const AppContextProvider: React.FC<{ children: ReactNode }> = ({ children
 
     try {
       const isXbarChart = selectedChartType === 'xBarR' || selectedChartType === 'xBarS';
-      const effectiveSampleSize = isXbarChart && selectedColumns.length > 1
-        ? selectedColumns.length
-        : sampleSize;
 
       const totalRows = rawData.data.length;
       const totalCols = rawData.headers.length;
@@ -162,6 +162,7 @@ export const AppContextProvider: React.FC<{ children: ReactNode }> = ({ children
       }
 
       const selectedColumn = effectiveSelectedColumns[0];
+      const effectiveSampleSize = isXbarChart && effectiveSelectedColumns.length > 1 ? effectiveSelectedColumns.length : sampleSize;
       const diagnosticsResult = buildSpcDiagnostics({
         rows: filteredData,
         column: selectedColumn,
@@ -172,88 +173,44 @@ export const AppContextProvider: React.FC<{ children: ReactNode }> = ({ children
         selectedColumns: effectiveSelectedColumns,
       });
 
-      // Calculate control limits based on the chart type
-      const controlLimits = calculateControlLimits(filteredData, selectedColumn, selectedChartType, effectiveSampleSize, denominatorInRange);
-
-      // Detect rule violations — align series with chart type semantics
-      let violations;
-      let chartedValuesForStats = controlLimits.chartValues?.filter(Number.isFinite) ?? [];
-      if (selectedChartType === 'xBarR' || selectedChartType === 'xBarS') {
-        // Build the X-bar series (subgroup means), matching chart logic
-        const means: number[] = [];
-        if (selectedColumns.length > 1) {
-          // Multi-column per-row subgrouping
-          const valueColumns = effectiveSelectedColumns;
-          filteredData.forEach((row) => {
-            const vals = valueColumns.map(h => parseFloat(row[h]));
-            if (vals.every(v => !isNaN(v))) {
-              const group = vals.slice(0, effectiveSampleSize);
-              if (group.length === effectiveSampleSize) {
-                const m = group.reduce((a, b) => a + b, 0) / effectiveSampleSize;
-                means.push(m);
-              }
-            }
-          });
-        } else {
-          // Single-column sequential subgrouping
-          const values = filteredData.map(row => parseFloat(String(row[selectedColumn]))).filter(v => !isNaN(v));
-          for (let i = 0; i < values.length; i += effectiveSampleSize) {
-            const group = values.slice(i, i + effectiveSampleSize);
-            if (group.length === effectiveSampleSize) {
-              const m = group.reduce((a, b) => a + b, 0) / effectiveSampleSize;
-              means.push(m);
-            }
-          }
-        }
-
-        // Use X-bar control limits with sigma for the mean (process sigma / sqrt(n))
-        const xbarControl = {
-          ucl: controlLimits.ucl,
-          lcl: controlLimits.lcl,
-          centerLine: controlLimits.centerLine,
-          sigma: controlLimits.sigma / Math.sqrt(effectiveSampleSize)
-        } as any;
-        const series = means.map(v => ({ v }));
-        violations = detectRuleViolations(series as any, 'v', xbarControl);
-        chartedValuesForStats = means;
-      } else if (controlLimits.chartValues?.length) {
-        const series = controlLimits.chartValues.map(v => ({ v }));
-        violations = detectRuleViolations(series as any, 'v', controlLimits);
-      } else {
-        // Default behavior (Individuals, p, np, ewma, etc.)
-        violations = detectRuleViolations(filteredData, selectedColumn, controlLimits);
-        chartedValuesForStats = filteredData.map(row => parseFloat(String(row[selectedColumn]))).filter(Number.isFinite);
-      }
-
-      const capabilityStatus = calculateCapabilityStatus(
-        diagnosticsResult.numericValues,
-        controlLimits.centerLine,
-        controlLimits.sigma,
-        {
-          lowerSpecLimit: chartOptions.lowerSpecLimit,
-          upperSpecLimit: chartOptions.upperSpecLimit,
-          targetValue: chartOptions.targetValue,
-        },
-        {
-          chartType: selectedChartType,
-          dataProfile: diagnosticsResult.profile,
-          ruleViolations: violations,
-        },
+      const controlLimits = calculateControlLimits(
+        filteredData, selectedColumn, selectedChartType, effectiveSampleSize, denominatorInRange,
+        isXbarChart ? effectiveSelectedColumns : undefined,
       );
-
-      const finiteStatsValues = chartedValuesForStats.length
-        ? chartedValuesForStats
-        : diagnosticsResult.numericValues;
+      if (controlLimits.processSigma === 0) {
+        diagnosticsResult.diagnostics.push({ severity: 'warning', code: 'zero-within-variation', message: 'Within-process variation is zero; Cp and Cpk cannot be estimated.' });
+      }
+      const chartedValues = controlLimits.chartValues ?? [];
+      const series = chartedValues.map(v => ({ v }));
+      const ruleSet = chartOptions.ruleSet ?? 'nelson';
+      const violations = ['histogram', 'scatterPlot'].includes(selectedChartType)
+        ? []
+        : detectRuleViolations(series, 'v', controlLimits, ruleSet, selectedChartType === 'ewma' ? { ruleNumbers: [1] } : {});
+      const variationChart = controlLimits.variationChart;
+      const variationRuleViolations = variationChart
+        ? detectRuleViolations(variationChart.chartValues.map(v => ({ v })), 'v', variationChart, ruleSet, { ruleNumbers: [1] })
+        : [];
+      const capabilityValues = controlLimits.capabilityValues ?? diagnosticsResult.numericValues;
+      const capabilityMean = capabilityValues.length
+        ? capabilityValues.reduce((sum, value) => sum + value, 0) / capabilityValues.length
+        : NaN;
+      const capabilityStatus = calculateCapabilityStatus(
+        capabilityValues, capabilityMean, controlLimits.processSigma ?? NaN,
+        { lowerSpecLimit: chartOptions.lowerSpecLimit, upperSpecLimit: chartOptions.upperSpecLimit, targetValue: chartOptions.targetValue },
+        { chartType: selectedChartType, dataProfile: diagnosticsResult.profile, ruleViolations: [...violations, ...variationRuleViolations], sigmaMethod: controlLimits.sigmaMethod, diagnostics: diagnosticsResult.diagnostics },
+      );
+      const finiteStatsValues = chartedValues.filter(Number.isFinite);
 
       setProcessedData({
         data: filteredData,
         controlLimits,
         ruleViolations: violations,
+        variationRuleViolations,
         statistics: {
           mean: controlLimits.centerLine,
           standardDeviation: controlLimits.sigma,
-          min: finiteStatsValues.length ? Math.min(...finiteStatsValues) : Number.NaN,
-          max: finiteStatsValues.length ? Math.max(...finiteStatsValues) : Number.NaN,
+          min: finiteStatsValues.length ? finiteStatsValues.reduce((minimum, value) => Math.min(minimum, value), Infinity) : Number.NaN,
+          max: finiteStatsValues.length ? finiteStatsValues.reduce((maximum, value) => Math.max(maximum, value), -Infinity) : Number.NaN,
           count: finiteStatsValues.length,
         },
         dataProfile: diagnosticsResult.profile,
@@ -263,6 +220,7 @@ export const AppContextProvider: React.FC<{ children: ReactNode }> = ({ children
       });
     } catch (error) {
       console.error('Error processing data:', error);
+      setProcessedData(null);
       setErrorMessage('Error processing data. Please check your data format and selected columns.');
     } finally {
       setIsProcessing(false);

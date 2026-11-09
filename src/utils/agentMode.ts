@@ -2,6 +2,43 @@ import { ChartType } from '../types/DataTypes';
 
 const CHART_TYPES: ChartType[] = ['individual', 'pChart', 'npChart', 'cChart', 'uChart', 'xBarS', 'xBarR', 'ewma', 'histogram', 'scatterPlot'];
 
+// Paraphrases weaker models produce, keyed by the lowercased name with separators and a
+// trailing "chart"/"plot" removed. Mirrors CHART_TYPE_ALIASES in the DSPy gateway.
+const CHART_TYPE_ALIASES: Record<string, ChartType> = {
+  individual: 'individual',
+  individuals: 'individual',
+  i: 'individual',
+  imr: 'individual',
+  xmr: 'individual',
+  individualsmovingrange: 'individual',
+  individualmovingrange: 'individual',
+  p: 'pChart',
+  proportion: 'pChart',
+  fractiondefective: 'pChart',
+  fractionnonconforming: 'pChart',
+  np: 'npChart',
+  numberdefective: 'npChart',
+  numbernonconforming: 'npChart',
+  c: 'cChart',
+  defectcount: 'cChart',
+  u: 'uChart',
+  defectsperunit: 'uChart',
+  xbars: 'xBarS',
+  xbarands: 'xBarS',
+  xbarstddev: 'xBarS',
+  xbarstdev: 'xBarS',
+  xbarsigma: 'xBarS',
+  xbarr: 'xBarR',
+  xbarandr: 'xBarR',
+  xbarrange: 'xBarR',
+  ewma: 'ewma',
+  exponentiallyweightedmovingaverage: 'ewma',
+  histogram: 'histogram',
+  hist: 'histogram',
+  scatter: 'scatterPlot',
+  xy: 'scatterPlot',
+};
+
 export interface AgentRecommendation {
   chartType: ChartType | null;
   yColumns: string[];
@@ -14,6 +51,42 @@ export interface AgentRecommendation {
   reason: string;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const hasOwn = (value: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+
+export const normalizeAgentChartType = (value: unknown): ChartType | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const raw = value.trim();
+  if (CHART_TYPES.includes(raw as ChartType)) {
+    return raw as ChartType;
+  }
+  const key = raw
+    .toLowerCase()
+    .replace(/x̄|x̅/g, 'xbar')
+    .replace(/[\s_\-–—/().,&+]+/g, '')
+    .replace(/(charts?|plots?|graph)$/, '');
+  return CHART_TYPE_ALIASES[key] ?? null;
+};
+
+/** Exact header first, then a unique case-insensitive match; never a fuzzy guess. */
+export const resolveHeaderName = (value: string, headers: string[]): string | null => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (headers.includes(trimmed)) {
+    return trimmed;
+  }
+  const folded = trimmed.toLocaleLowerCase();
+  const matches = headers.filter((header) => header.trim().toLocaleLowerCase() === folded);
+  return matches.length === 1 ? matches[0] : null;
+};
+
 const normalizeOptionalLabel = (value: unknown): string | undefined => {
   if (typeof value !== 'string') {
     return undefined;
@@ -21,6 +94,26 @@ const normalizeOptionalLabel = (value: unknown): string | undefined => {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const normalizeOptionalColumn = (recommendation: Record<string, unknown>, key: string): string | null | undefined => {
+  if (!hasOwn(recommendation, key)) {
+    return undefined;
+  }
+  const value = recommendation[key];
+  if (typeof value === 'string') {
+    return value.trim() || null;
+  }
+  return value === null ? null : undefined;
+};
+
+const normalizeSampleSize = (value: unknown): number | undefined => {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^\s*\d+(\.\d+)?\s*$/.test(value)
+      ? Number(value)
+      : Number.NaN;
+  return Number.isFinite(numeric) ? Math.max(2, Math.min(25, Math.round(numeric))) : undefined;
 };
 
 const findMatchingBraceEnd = (content: string, start: number): number | null => {
@@ -90,97 +183,64 @@ const extractJsonCandidates = (content: string): unknown[] => {
 };
 
 const normalizeRecommendationPayload = (parsed: unknown): AgentRecommendation | null => {
-  try {
-    if (!parsed || typeof parsed !== 'object') {
-      return null;
-    }
-    const payload = parsed as { recommendation?: unknown };
-    const recommendation = payload.recommendation;
-    if (!recommendation || typeof recommendation !== 'object') {
-      return null;
-    }
-
-    const chartTypeRaw = recommendation.chartType;
-    const chartType = typeof chartTypeRaw === 'string' && CHART_TYPES.includes(chartTypeRaw as ChartType)
-      ? (chartTypeRaw as ChartType)
-      : null;
-
-    const yColumnsRaw: unknown[] = Array.isArray(recommendation.yColumns)
-      ? recommendation.yColumns
-      : [];
-    const yColumnsFromArray = yColumnsRaw
-      .filter((column): column is string => typeof column === 'string')
-      .map((column) => column.trim())
-      .filter((column) => column.length > 0);
-
-    const yColumnLegacy = typeof recommendation.yColumn === 'string' && recommendation.yColumn.trim()
-      ? recommendation.yColumn.trim()
-      : null;
-
-    const yColumns = yColumnsFromArray.length > 0
-      ? Array.from(new Set(yColumnsFromArray))
-      : yColumnLegacy
-        ? [yColumnLegacy]
-        : [];
-
-    const xAxisColumn = Object.prototype.hasOwnProperty.call(recommendation, 'xAxisColumn')
-      ? (typeof recommendation.xAxisColumn === 'string'
-        ? recommendation.xAxisColumn.trim() || null
-        : recommendation.xAxisColumn === null
-          ? null
-          : undefined)
-      : undefined;
-
-    const denominatorColumn = Object.prototype.hasOwnProperty.call(recommendation, 'denominatorColumn')
-      ? (typeof recommendation.denominatorColumn === 'string'
-        ? recommendation.denominatorColumn.trim() || null
-        : recommendation.denominatorColumn === null
-          ? null
-          : undefined)
-      : undefined;
-
-    const sampleSize = Object.prototype.hasOwnProperty.call(recommendation, 'sampleSize')
-      ? (typeof recommendation.sampleSize === 'number' && Number.isFinite(recommendation.sampleSize)
-        ? Math.max(2, Math.min(25, Math.round(recommendation.sampleSize)))
-        : undefined)
-      : undefined;
-
-    const chartLabel = normalizeOptionalLabel(recommendation.chartLabel);
-    const zAxisLabel = normalizeOptionalLabel(recommendation.zAxisLabel ?? recommendation.xAxisLabel);
-    const yAxisLabel = normalizeOptionalLabel(recommendation.yAxisLabel);
-
-    const reason = typeof recommendation.reason === 'string' && recommendation.reason.trim()
-      ? recommendation.reason.trim()
-      : '';
-
-    if (
-      !chartType
-      && yColumns.length === 0
-      && xAxisColumn === undefined
-      && denominatorColumn === undefined
-      && sampleSize === undefined
-      && chartLabel === undefined
-      && zAxisLabel === undefined
-      && yAxisLabel === undefined
-      && !reason
-    ) {
-      return null;
-    }
-
-    return {
-      chartType,
-      yColumns,
-      xAxisColumn,
-      denominatorColumn,
-      sampleSize,
-      chartLabel,
-      zAxisLabel,
-      yAxisLabel,
-      reason,
-    };
-  } catch {
+  if (!isRecord(parsed) || !isRecord(parsed.recommendation)) {
     return null;
   }
+  const recommendation = parsed.recommendation;
+
+  const chartType = normalizeAgentChartType(recommendation.chartType);
+
+  const yColumnsRaw: unknown[] = Array.isArray(recommendation.yColumns) ? recommendation.yColumns : [];
+  const yColumnsFromArray = yColumnsRaw
+    .filter((column): column is string => typeof column === 'string')
+    .map((column) => column.trim())
+    .filter((column) => column.length > 0);
+
+  const yColumnLegacy = typeof recommendation.yColumn === 'string' && recommendation.yColumn.trim()
+    ? recommendation.yColumn.trim()
+    : null;
+
+  const yColumns = yColumnsFromArray.length > 0
+    ? Array.from(new Set(yColumnsFromArray))
+    : yColumnLegacy
+      ? [yColumnLegacy]
+      : [];
+
+  const xAxisColumn = normalizeOptionalColumn(recommendation, 'xAxisColumn');
+  const denominatorColumn = normalizeOptionalColumn(recommendation, 'denominatorColumn');
+  const sampleSize = hasOwn(recommendation, 'sampleSize') ? normalizeSampleSize(recommendation.sampleSize) : undefined;
+
+  const chartLabel = normalizeOptionalLabel(recommendation.chartLabel);
+  const zAxisLabel = normalizeOptionalLabel(recommendation.zAxisLabel ?? recommendation.xAxisLabel);
+  const yAxisLabel = normalizeOptionalLabel(recommendation.yAxisLabel);
+
+  const reason = typeof recommendation.reason === 'string' ? recommendation.reason.trim() : '';
+
+  if (
+    !chartType
+    && yColumns.length === 0
+    && xAxisColumn === undefined
+    && denominatorColumn === undefined
+    && sampleSize === undefined
+    && chartLabel === undefined
+    && zAxisLabel === undefined
+    && yAxisLabel === undefined
+    && !reason
+  ) {
+    return null;
+  }
+
+  return {
+    chartType,
+    yColumns,
+    xAxisColumn,
+    denominatorColumn,
+    sampleSize,
+    chartLabel,
+    zAxisLabel,
+    yAxisLabel,
+    reason,
+  };
 };
 
 const scoreRecommendation = (recommendation: AgentRecommendation): number => {
@@ -239,23 +299,25 @@ export const validateAgentRecommendationAgainstHeaders = (
   recommendation: AgentRecommendation,
   headers: string[],
 ): AgentRecommendation => {
-  const yColumns = recommendation.yColumns.filter((column) => headers.includes(column));
+  const yColumns = Array.from(new Set(
+    recommendation.yColumns
+      .map((column) => resolveHeaderName(column, headers))
+      .filter((column): column is string => column !== null),
+  ));
 
-  const xAxisColumn = recommendation.xAxisColumn === undefined
-    ? undefined
-    : recommendation.xAxisColumn === null
-      ? null
-      : headers.includes(recommendation.xAxisColumn)
-        ? recommendation.xAxisColumn
-        : undefined;
+  const resolveOptional = (value: string | null | undefined): string | null | undefined => {
+    if (value === undefined || value === null) {
+      return value;
+    }
+    return resolveHeaderName(value, headers) ?? undefined;
+  };
 
-  const denominatorColumn = recommendation.denominatorColumn === undefined
+  const xAxisColumn = resolveOptional(recommendation.xAxisColumn);
+  const resolvedDenominator = resolveOptional(recommendation.denominatorColumn);
+  // A column cannot be its own denominator; drop the suggestion rather than chart count/count.
+  const denominatorColumn = typeof resolvedDenominator === 'string' && yColumns.includes(resolvedDenominator)
     ? undefined
-    : recommendation.denominatorColumn === null
-      ? null
-      : headers.includes(recommendation.denominatorColumn)
-        ? recommendation.denominatorColumn
-        : undefined;
+    : resolvedDenominator;
 
   return {
     ...recommendation,

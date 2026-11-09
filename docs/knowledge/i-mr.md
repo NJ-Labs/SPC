@@ -31,4 +31,8 @@ Control Limits
 Notes
 - The first observation has no moving range; the MR chart therefore has N−1 points.
 - MR points can be zero when two consecutive observations are equal.
-- Rule detection on I chart uses I limits; MR chart can be monitored for outliers beyond its UCL.
+- MR̄/d2 is the within-process sigma (the app reports it as processSigma, method "MR-bar/d2 (n=2)"). Cp/Cpk use it.
+  It is usually smaller than the overall sample standard deviation, which Pp/Ppk use; a large gap points to drift or shifts.
+- The app runs the active rule set (Nelson or Western Electric) on the I chart and only test 1 (beyond UCL) on the MR chart.
+- An MR signal means short-term variation jumped; check it before trusting the I chart limits.
+- Strong autocorrelation makes MR̄ too small and the I limits too tight, producing many signals that are not special causes.

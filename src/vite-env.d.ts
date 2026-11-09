@@ -1,9 +1,6 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-	readonly AI_API_URL?: string;
-	readonly AI_API_KEY?: string;
-	readonly AI_MODEL?: string;
 	readonly VITE_AI_API_URL?: string;
 	readonly VITE_AI_API_KEY?: string;
 	readonly VITE_AI_MODEL?: string;

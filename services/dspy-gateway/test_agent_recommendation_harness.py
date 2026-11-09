@@ -95,6 +95,13 @@ json
         self.assertNotIn("recommendation", narrative)
 
 
+FULL_PROFILES = [
+    {"name": "A", "numeric": 3, "nonNumeric": 0, "missing": 0, "integerLike": False, "nonNegative": True, "min": 1.0, "max": 2.5, "sampled": False},
+    {"name": "B", "numeric": 3, "nonNumeric": 0, "missing": 0, "integerLike": False, "nonNegative": True, "min": 1.5, "max": 3.5, "sampled": False},
+    {"name": "Date", "numeric": 0, "nonNumeric": 3, "missing": 0, "integerLike": False, "nonNegative": False, "min": None, "max": None, "sampled": False},
+]
+
+
 def build_agent_request(**overrides: object) -> AgentTurnRequest:
     payload = {
         "messages": [{"role": "user", "content": "Configure an X-bar R chart for A and B by Date"}],
@@ -117,7 +124,12 @@ def build_agent_request(**overrides: object) -> AgentTurnRequest:
         },
         "availableHeaders": ["A", "B", "Date"],
         "worksheet": {"activeSheetIndex": 0, "activeSheetName": "Sheet1", "worksheetCount": 1},
-        "dataset": {"summary": "Columns A, B, Date", "headers": ["A", "B", "Date"], "previewRows": [{"A": 1, "B": 2, "Date": "2024-01-01"}]},
+        "dataset": {
+            "summary": "Columns A, B, Date",
+            "headers": ["A", "B", "Date"],
+            "previewRows": [{"A": 1, "B": 2, "Date": "2024-01-01"}],
+            "columnProfiles": FULL_PROFILES,
+        },
         "processed": {"statistics": {"mean": 1.5}, "ruleViolationCount": 0},
         "selectedSheetIndex": 0,
     }
@@ -204,6 +216,22 @@ class SPCAgentToolsAndKnowledgeTest(unittest.TestCase):
         self.assertIn("yColumns", result["skipped"])
         self.assertIn("xAxisColumn", result["skipped"])
         self.assertNotIn("yColumns", result["patch"])
+
+    def test_legacy_request_without_profiles_cannot_switch_to_unverified_columns(self) -> None:
+        request = build_agent_request(
+            dataset={"summary": "Columns A, B, Date", "headers": ["A", "B", "Date"]},
+            processed={"statistics": {"mean": 1.5}, "dataProfile": {"column": "A", "dataKind": "continuous", "numericCount": 3, "integerLike": False, "nonNegative": True}},
+        )
+        session = SPCAgentToolSession(request, SPCAgentHarness().tool_metadata)
+
+        result = json.loads(session.update_controls(yColumns=["Date"]))
+        self.assertIn("Cannot verify that 'Date' holds numeric values", result["rejected"][0]["reason"])
+        self.assertIn("no column profile", result["rejected"][0]["reason"])
+
+        # The currently charted column is still known from the app's full-data profile.
+        result = json.loads(session.update_controls(chartType="ewma", yColumns=["A"]))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["patch"]["chartType"], "ewma")
 
     def test_knowledge_loader_selects_expected_markdown(self) -> None:
         loader = SPCKnowledgeLoader()

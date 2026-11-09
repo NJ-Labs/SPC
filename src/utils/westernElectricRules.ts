@@ -1,298 +1,134 @@
-import { ControlLimits, DataPoint, RuleViolation } from '../types/DataTypes';
+import { ControlLimits, DataPoint, RuleSet, RuleSignal, RuleViolation } from '../types/DataTypes';
 
-// Western Electric Rules for detecting special cause variation
+type RuleKind = 'limit' | 'sameSide' | 'trend' | 'alternating' | 'zone2' | 'zone1' | 'within1' | 'outside1';
+export interface RuleMetadata {
+  ruleNumber: number;
+  description: string;
+  windowSize: number;
+  kind: RuleKind;
+}
+
+// The historical default was the eight Nelson tests, despite the old function name.
+export const RULE_SETS: Record<RuleSet, readonly RuleMetadata[]> = {
+  nelson: [
+    { ruleNumber: 1, kind: 'limit', windowSize: 1, description: 'One point beyond a control limit' },
+    { ruleNumber: 2, kind: 'sameSide', windowSize: 9, description: '9 consecutive points on the same side of the centerline' },
+    { ruleNumber: 3, kind: 'trend', windowSize: 6, description: '6 consecutive points all increasing or all decreasing' },
+    { ruleNumber: 4, kind: 'alternating', windowSize: 14, description: '14 consecutive points alternating up and down' },
+    { ruleNumber: 5, kind: 'zone2', windowSize: 3, description: '2 out of 3 consecutive points beyond 2σ on the same side' },
+    { ruleNumber: 6, kind: 'zone1', windowSize: 5, description: '4 out of 5 consecutive points beyond 1σ on the same side' },
+    { ruleNumber: 7, kind: 'within1', windowSize: 15, description: '15 consecutive points within 1σ of the centerline' },
+    { ruleNumber: 8, kind: 'outside1', windowSize: 8, description: '8 consecutive points beyond 1σ, with points on both sides' },
+  ],
+  westernElectric: [
+    { ruleNumber: 1, kind: 'limit', windowSize: 1, description: 'One point beyond a control limit' },
+    { ruleNumber: 2, kind: 'zone2', windowSize: 3, description: '2 out of 3 consecutive points beyond 2σ on the same side' },
+    { ruleNumber: 3, kind: 'zone1', windowSize: 5, description: '4 out of 5 consecutive points beyond 1σ on the same side' },
+    { ruleNumber: 4, kind: 'sameSide', windowSize: 8, description: '8 consecutive points on the same side of the centerline' },
+  ],
+};
+
+export const getRuleDescriptions = (ruleSet: RuleSet = 'nelson'): RuleMetadata[] =>
+  RULE_SETS[ruleSet].map(rule => ({ ...rule }));
+
+// Kept for existing callers; pass westernElectric explicitly for the four WE rules.
+export const getWesternElectricRulesDescription = (ruleSet: RuleSet = 'nelson'): RuleMetadata[] =>
+  getRuleDescriptions(ruleSet);
+
+const parseValue = (value: unknown): number => {
+  if ((typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '') return Number.NaN;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+};
+
+/** Returns each participating point once per rule, exact counts, and bounded window evidence. */
 export const detectRuleViolations = (
   data: DataPoint[],
   column: string,
-  controlLimits: ControlLimits
+  controlLimits: ControlLimits,
+  ruleSet: RuleSet = 'nelson',
+  options: { ruleNumbers?: readonly number[]; maxEvidenceWindows?: number } = {},
 ): RuleViolation[] => {
+  const values = data.map(row => parseValue(row[column]));
+  const { centerLine } = controlLimits;
   const violations: RuleViolation[] = [];
-  const values = data.map((row) => {
-    const parsed = parseFloat(String(row[column]));
-    return Number.isFinite(parsed) ? parsed : null;
-  });
-  const { ucl, lcl, centerLine, sigma } = controlLimits;
+  let points = new Map<number, RuleViolation>();
+  let evidenceWindows = 0;
+  const maxEvidenceWindows = Math.max(0, Math.floor(options.maxEvidenceWindows ?? 200));
+  // If a pointwise series exists, a missing/invalid entry is a gap, never a global fallback.
+  const at = (series: number[] | undefined, fallback: number, index: number): number =>
+    series === undefined ? fallback : series[index];
+  const sigmaAt = (index: number) => at(controlLimits.sigmaSeries, controlLimits.sigma, index);
 
-  const valueAt = (index: number): number | null => values[index] ?? null;
-  const sigmaAt = (index: number): number => {
-    const pointSigma = controlLimits.sigmaSeries?.[index];
-    return Number.isFinite(pointSigma) && pointSigma > 0 ? pointSigma : sigma;
-  };
-  const uclAt = (index: number): number => {
-    const pointUcl = controlLimits.uclSeries?.[index];
-    return Number.isFinite(pointUcl) ? pointUcl : ucl;
-  };
-  const lclAt = (index: number): number => {
-    const pointLcl = controlLimits.lclSeries?.[index];
-    return Number.isFinite(pointLcl) ? pointLcl : lcl;
-  };
-  const pushViolation = (index: number, ruleNumber: number, description: string) => {
-    const pointValue = valueAt(index);
-    if (pointValue === null) {
-      return;
-    }
-    violations.push({ index, pointValue, ruleNumber, description });
-  };
-  
-  // Rule 1: Any point beyond the control limits (> UCL or < LCL)
-  for (let i = 0; i < values.length; i++) {
-    const value = valueAt(i);
-    if (value === null) {
-      continue;
-    }
-    if (value > uclAt(i)) {
-      pushViolation(i, 1, 'Point beyond Upper Control Limit (UCL)');
-    } else if (value < lclAt(i)) {
-      pushViolation(i, 1, 'Point beyond Lower Control Limit (LCL)');
-    }
-  }
-  
-  // Rule 2: 9 consecutive points on the same side of the center line
-  const checkConsecutiveOneSide = (startIndex: number) => {
-    if (startIndex + 8 >= values.length) return false;
-    
-    const firstValue = valueAt(startIndex);
-    if (firstValue === null || firstValue === centerLine) return false;
-    const initialSide = firstValue > centerLine;
-    for (let i = startIndex + 1; i < startIndex + 9; i++) {
-      const currentValue = valueAt(i);
-      if (currentValue === null || currentValue === centerLine) return false;
-      const currentSide = currentValue > centerLine;
-      if (currentSide !== initialSide) return false;
-    }
-    return true;
-  };
-  
-  for (let i = 0; i < values.length - 8; i++) {
-    if (checkConsecutiveOneSide(i)) {
-      const side = (valueAt(i) ?? centerLine) > centerLine ? 'above' : 'below';
-      for (let j = i; j < i + 9; j++) {
-        pushViolation(j, 2, `Part of 9 consecutive points ${side} the center line`);
-      }
-      // Skip ahead to avoid detecting the same pattern multiple times
-      i += 8;
-    }
-  }
-  
-  // Rule 3: 6 consecutive points all increasing or all decreasing
-  const checkConsecutiveTrend = (startIndex: number) => {
-    if (startIndex + 5 >= values.length) return false;
-    
-    let increasing = true;
-    let decreasing = true;
-    
-    for (let i = startIndex; i < startIndex + 5; i++) {
-      const current = valueAt(i);
-      const next = valueAt(i + 1);
-      if (current === null || next === null) return false;
-      if (current >= next) increasing = false;
-      if (current <= next) decreasing = false;
-    }
-    
-    return increasing || decreasing;
-  };
-  
-  for (let i = 0; i < values.length - 5; i++) {
-    if (checkConsecutiveTrend(i)) {
-      const trend = (valueAt(i) ?? 0) < (valueAt(i + 1) ?? 0) ? 'increasing' : 'decreasing';
-      for (let j = i; j < i + 6; j++) {
-        pushViolation(j, 3, `Part of 6 consecutive points ${trend}`);
-      }
-      // Skip ahead
-      i += 5;
-    }
-  }
-  
-  // Rule 4: 14 consecutive points alternating up and down
-  const checkAlternating = (startIndex: number) => {
-    if (startIndex + 13 >= values.length) return false;
-    
-    let alternating = true;
-    for (let i = startIndex; i < startIndex + 12; i++) {
-      const a = valueAt(i);
-      const b = valueAt(i + 1);
-      const c = valueAt(i + 2);
-      if (a === null || b === null || c === null || a === b || b === c) return false;
-      if ((a < b && b < c) || (a > b && b > c)) {
-        alternating = false;
-        break;
+  const addSignal = (rule: RuleMetadata, start: number, end: number, participatingIndices: number[]) => {
+    const keepEvidence = evidenceWindows++ < maxEvidenceWindows;
+    const signal: RuleSignal | undefined = keepEvidence ? { windowStart: start, windowEnd: end, signalIndex: end, participatingIndices } : undefined;
+    for (const index of participatingIndices) {
+      const existing = points.get(index);
+      if (existing) {
+        if (signal) existing.signals?.push(signal);
+      } else {
+        points.set(index, {
+          index, pointValue: values[index], ruleNumber: rule.ruleNumber, description: rule.description,
+          ruleSet, windowStart: start, windowEnd: end, signalIndex: end, signalCount: 0,
+          ...(signal ? { participatingIndices, signals: [signal] } : {}),
+        });
       }
     }
-    
-    return alternating;
+    const owner = points.get(participatingIndices[participatingIndices.length - 1]);
+    if (owner) owner.signalCount = (owner.signalCount ?? 0) + 1;
   };
-  
-  for (let i = 0; i < values.length - 13; i++) {
-    if (checkAlternating(i)) {
-      for (let j = i; j < i + 14; j++) {
-        pushViolation(j, 4, 'Part of 14 consecutive points alternating up and down');
+
+  for (const rule of RULE_SETS[ruleSet]) {
+    if (options.ruleNumbers && !options.ruleNumbers.includes(rule.ruleNumber)) continue;
+    points = new Map();
+    evidenceWindows = 0;
+    for (let end = rule.windowSize - 1; end < values.length; end++) {
+      const start = end - rule.windowSize + 1;
+      const indices = Array.from({ length: rule.windowSize }, (_, offset) => start + offset);
+      if (!indices.every(index => Number.isFinite(values[index]))) continue;
+
+      if (rule.kind === 'limit') {
+        const ucl = at(controlLimits.uclSeries, controlLimits.ucl, end);
+        const lcl = at(controlLimits.lclSeries, controlLimits.lcl, end);
+        if ((Number.isFinite(ucl) && values[end] > ucl) || (Number.isFinite(lcl) && values[end] < lcl)) {
+          addSignal(rule, start, end, indices);
+        }
+        continue;
       }
-      // Skip ahead
-      i += 13;
-    }
-  }
-  
-  // Rule 5: 2 out of 3 consecutive points beyond 2 sigma on the same side
-  const check2of3Beyond2Sigma = (startIndex: number) => {
-    if (startIndex + 2 >= values.length) return false;
-    
-    let countAbove = 0;
-    let countBelow = 0;
-    
-    for (let i = startIndex; i < startIndex + 3; i++) {
-      const value = valueAt(i);
-      const pointSigma = sigmaAt(i);
-      if (value === null || !Number.isFinite(pointSigma) || pointSigma <= 0) return false;
-      if (value > centerLine + 2 * pointSigma) countAbove++;
-      if (value < centerLine - 2 * pointSigma) countBelow++;
-    }
-    
-    return countAbove >= 2 || countBelow >= 2;
-  };
-  
-  for (let i = 0; i < values.length - 2; i++) {
-    if (check2of3Beyond2Sigma(i)) {
-      let aboveCount = 0;
-      let belowCount = 0;
-      for (let j = i; j < i + 3; j++) {
-        const value = valueAt(j);
-        const pointSigma = sigmaAt(j);
-        if (value !== null && value > centerLine + 2 * pointSigma) aboveCount++;
-        if (value !== null && value < centerLine - 2 * pointSigma) belowCount++;
+      if (rule.kind === 'trend' || rule.kind === 'alternating') {
+        const differences = indices.slice(1).map(index => values[index] - values[index - 1]);
+        const match = rule.kind === 'trend'
+          ? differences.every(d => d > 0) || differences.every(d => d < 0)
+          : differences.every((d, i) => d !== 0 && (i === 0 || Math.sign(d) !== Math.sign(differences[i - 1])));
+        if (match) addSignal(rule, start, end, indices);
+        continue;
       }
-      const above = aboveCount >= belowCount;
-      const zone = above ? 'above +2σ' : 'below -2σ';
-      
-      for (let j = i; j < i + 3; j++) {
-        const value = valueAt(j);
-        const pointSigma = sigmaAt(j);
-        if (value === null) continue;
-        const beyond2Sigma = above 
-          ? value > centerLine + 2 * pointSigma 
-          : value < centerLine - 2 * pointSigma;
-          
-        if (beyond2Sigma) {
-          pushViolation(j, 5, `Part of 2 out of 3 consecutive points ${zone}`);
+      if (!Number.isFinite(centerLine)) continue;
+      if (rule.kind === 'sameSide') {
+        if (indices.every(i => values[i] > centerLine) || indices.every(i => values[i] < centerLine)) {
+          addSignal(rule, start, end, indices);
+        }
+        continue;
+      }
+      if (!indices.every(i => Number.isFinite(sigmaAt(i)) && sigmaAt(i) > 0)) continue;
+      const z = indices.map(i => (values[i] - centerLine) / sigmaAt(i));
+      if (rule.kind === 'zone2' || rule.kind === 'zone1') {
+        const threshold = rule.kind === 'zone2' ? 2 : 1;
+        const required = rule.kind === 'zone2' ? 2 : 4;
+        const above = indices.filter((_, i) => z[i] > threshold);
+        const below = indices.filter((_, i) => z[i] < -threshold);
+        if (above.length >= required) addSignal(rule, start, end, above);
+        if (below.length >= required) addSignal(rule, start, end, below);
+      } else if (rule.kind === 'within1') {
+        if (z.every(value => Math.abs(value) < 1)) addSignal(rule, start, end, indices);
+      } else if (rule.kind === 'outside1') {
+        if (z.every(value => Math.abs(value) > 1) && z.some(value => value > 1) && z.some(value => value < -1)) {
+          addSignal(rule, start, end, indices);
         }
       }
-      
-      // Skip ahead
-      i += 2;
     }
+    for (const violation of points.values()) violations.push(violation);
   }
-  
-  // Rule 6: 4 out of 5 consecutive points beyond 1 sigma on the same side
-  const check4of5Beyond1Sigma = (startIndex: number) => {
-    if (startIndex + 4 >= values.length) return false;
-    
-    let countAbove = 0;
-    let countBelow = 0;
-    
-    for (let i = startIndex; i < startIndex + 5; i++) {
-      const value = valueAt(i);
-      const pointSigma = sigmaAt(i);
-      if (value === null || !Number.isFinite(pointSigma) || pointSigma <= 0) return false;
-      if (value > centerLine + pointSigma) countAbove++;
-      if (value < centerLine - pointSigma) countBelow++;
-    }
-    
-    return countAbove >= 4 || countBelow >= 4;
-  };
-  
-  for (let i = 0; i < values.length - 4; i++) {
-    if (check4of5Beyond1Sigma(i)) {
-      let aboveCount = 0;
-      let belowCount = 0;
-      for (let j = i; j < i + 5; j++) {
-        const value = valueAt(j);
-        const pointSigma = sigmaAt(j);
-        if (value !== null && value > centerLine + pointSigma) aboveCount++;
-        if (value !== null && value < centerLine - pointSigma) belowCount++;
-      }
-      const above = aboveCount >= belowCount;
-      const zone = above ? 'above +1σ' : 'below -1σ';
-      
-      for (let j = i; j < i + 5; j++) {
-        const value = valueAt(j);
-        const pointSigma = sigmaAt(j);
-        if (value === null) continue;
-        const beyond1Sigma = above 
-          ? value > centerLine + pointSigma 
-          : value < centerLine - pointSigma;
-          
-        if (beyond1Sigma) {
-          pushViolation(j, 6, `Part of 4 out of 5 consecutive points ${zone}`);
-        }
-      }
-      
-      // Skip ahead
-      i += 4;
-    }
-  }
-  
-  // Rule 7: 15 consecutive points within 1 sigma
-  const check15WithinOneSigma = (startIndex: number) => {
-    if (startIndex + 14 >= values.length) return false;
-    
-    for (let i = startIndex; i < startIndex + 15; i++) {
-      const value = valueAt(i);
-      const pointSigma = sigmaAt(i);
-      if (value === null || value > centerLine + pointSigma || value < centerLine - pointSigma) {
-        return false;
-      }
-    }
-    
-    return true;
-  };
-  
-  for (let i = 0; i < values.length - 14; i++) {
-    if (check15WithinOneSigma(i)) {
-      for (let j = i; j < i + 15; j++) {
-        pushViolation(j, 7, 'Part of 15 consecutive points within 1σ (process too consistent)');
-      }
-      // Skip ahead
-      i += 14;
-    }
-  }
-  
-  // Rule 8: 8 consecutive points beyond 1 sigma on either side
-  const check8BeyondOneSigma = (startIndex: number) => {
-    if (startIndex + 7 >= values.length) return false;
-    
-    for (let i = startIndex; i < startIndex + 8; i++) {
-      const value = valueAt(i);
-      const pointSigma = sigmaAt(i);
-      if (value === null || (value <= centerLine + pointSigma && value >= centerLine - pointSigma)) {
-        return false;
-      }
-    }
-    
-    return true;
-  };
-  
-  for (let i = 0; i < values.length - 7; i++) {
-    if (check8BeyondOneSigma(i)) {
-      for (let j = i; j < i + 8; j++) {
-        pushViolation(j, 8, 'Part of 8 consecutive points beyond 1σ on either side');
-      }
-      // Skip ahead
-      i += 7;
-    }
-  }
-  
   return violations;
-};
-
-// Get description of Western Electric Rules
-export const getWesternElectricRulesDescription = (): { ruleNumber: number; description: string }[] => {
-  return [
-    { ruleNumber: 1, description: 'One or more points beyond 3σ from the centerline' },
-    { ruleNumber: 2, description: '9 consecutive points on the same side of the centerline' },
-    { ruleNumber: 3, description: '6 consecutive points all increasing or all decreasing' },
-    { ruleNumber: 4, description: '14 consecutive points alternating up and down' },
-    { ruleNumber: 5, description: '2 out of 3 consecutive points beyond 2σ on the same side' },
-    { ruleNumber: 6, description: '4 out of 5 consecutive points beyond 1σ on the same side' },
-    { ruleNumber: 7, description: '15 consecutive points within 1σ (indicates too little variation)' },
-    { ruleNumber: 8, description: '8 consecutive points beyond 1σ on either side of the centerline' }
-  ];
 };

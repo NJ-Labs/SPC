@@ -1,280 +1,54 @@
-import React, { useRef } from 'react';
-import { Line } from 'react-chartjs-2';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  ChartOptions,
-} from 'chart.js';
-import zoomPlugin from 'chartjs-plugin-zoom';
+import React from 'react';
 import { useAppContext } from '../../../context/AppContext';
-import { computeXbarSComponents, calculateStandardDeviation, calculateMean, getControlChartConstants } from '../../../utils/spcCalculations';
-import { detectRuleViolations } from '../../../utils/westernElectricRules';
-
-ChartJS.register(zoomPlugin);
+import ControlChartView from '../ControlChartView';
+import VariationChartView from '../VariationChartView';
+import { buildAxisLabels } from '../chartSeries';
 
 const XBarSChart: React.FC = () => {
-  const { processedData, selectedColumns, chartOptions, sampleSize } = useAppContext();
-  const xbarRef = useRef<any>(null);
-  const sRef = useRef<any>(null);
-  
+  const { processedData, selectedColumns, chartOptions, sampleSize, xAxisColumn } = useAppContext();
+
   if (!processedData || !selectedColumns.length) {
     return <div>No data available</div>;
   }
-  
-  const selectedColumn = selectedColumns[0];
-  const data = processedData.data;
-  let subgroupMeans: number[] = [];
-  let subgroupStdDevs: number[] = [];
-  let xbarLimits = { ucl: 0, lcl: 0, centerLine: 0 };
-  let sChartLimits = { ucl: 0, lcl: 0, centerLine: 0 };
-  let labels: string[] = [];
 
-  if (selectedColumns.length > 1) {
-    // Multi-column per-row subgrouping
-    const valueColumns = selectedColumns;
-    const groups: number[][] = [];
-    data.forEach((row) => {
-      const vals = valueColumns.map(h => parseFloat(row[h]));
-      if (vals.every(v => !isNaN(v))) {
-        const group = vals.slice(0, sampleSize);
-        if (group.length === sampleSize) groups.push(group);
-      }
-    });
-    subgroupMeans = groups.map(g => calculateMean(g));
-    subgroupStdDevs = groups.map(g => calculateStandardDeviation(g));
-    const constants = getControlChartConstants(sampleSize);
-    const xbar = calculateMean(subgroupMeans);
-    const sbar = calculateMean(subgroupStdDevs);
-    xbarLimits = { ucl: xbar + constants.a3 * sbar, lcl: xbar - constants.a3 * sbar, centerLine: xbar };
-    sChartLimits = { ucl: constants.b4 * sbar, lcl: Math.max(0, constants.b3 * sbar), centerLine: sbar };
-    labels = subgroupMeans.map((_, i) => `${i + 1}`);
-  } else {
-    const values = data.map(row => parseFloat(row[selectedColumn]));
-    const res = computeXbarSComponents(values, sampleSize);
-    subgroupMeans = res.subgroupMeans;
-    subgroupStdDevs = res.subgroupStdDevs;
-    xbarLimits = res.xbarLimits;
-    sChartLimits = res.sChartLimits;
-    labels = subgroupMeans.map((_, index) => `${index + 1}`);
-  }
-
-  const sigmaXbarUp = (xbarLimits.ucl - xbarLimits.centerLine) / 3;
-  const sigmaXbarDown = (xbarLimits.centerLine - xbarLimits.lcl) / 3;
-  // Compute rule violations on X-bar series
-  const xbarControl = { ucl: xbarLimits.ucl, lcl: xbarLimits.lcl, centerLine: xbarLimits.centerLine, sigma: Math.max(sigmaXbarUp, sigmaXbarDown) } as any;
-  const seriesPoints = subgroupMeans.map(v => ({ v }));
-  const violations = detectRuleViolations(seriesPoints as any, 'v', xbarControl);
-  const defaultXbarPointColor = 'rgba(54, 162, 235, 0.9)';
-  const xbarPointColors = subgroupMeans.map((_, i) => {
-    if (!chartOptions.showRuleViolations) return defaultXbarPointColor;
-    return violations.some(v => v.index === i) ? 'red' : defaultXbarPointColor;
-  });
-
-  const xbarData = {
-    labels,
-    datasets: [
-      {
-        label: 'Subgroup Mean (X-bar)',
-        data: subgroupMeans,
-        borderColor: 'rgba(54, 162, 235, 0.9)',
-        backgroundColor: xbarPointColors,
-        pointBackgroundColor: xbarPointColors,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        tension: 0.1,
-      },
-      ...(chartOptions.showCenterLine ? [
-        {
-          label: 'Center Line',
-          data: Array(subgroupMeans.length).fill(xbarLimits.centerLine),
-          borderColor: 'rgba(75, 192, 192, 0.9)',
-          borderDash: [6, 6],
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: false,
-        }
-      ] : []),
-      ...(chartOptions.showSigma1 ? [
-        { label: '+1σ', data: Array(subgroupMeans.length).fill(xbarLimits.centerLine + sigmaXbarUp), borderColor: 'rgba(255,205,86,0.6)', borderDash: [2,2], borderWidth: 1, pointRadius: 0, fill: false },
-        { label: '-1σ', data: Array(subgroupMeans.length).fill(xbarLimits.centerLine - sigmaXbarDown), borderColor: 'rgba(255,205,86,0.6)', borderDash: [2,2], borderWidth: 1, pointRadius: 0, fill: false },
-      ] : []),
-      ...(chartOptions.showSigma2 ? [
-        { label: '+2σ', data: Array(subgroupMeans.length).fill(xbarLimits.centerLine + 2*sigmaXbarUp), borderColor: 'rgba(255,159,64,0.6)', borderDash: [3,3], borderWidth: 1, pointRadius: 0, fill: false },
-        { label: '-2σ', data: Array(subgroupMeans.length).fill(xbarLimits.centerLine - 2*sigmaXbarDown), borderColor: 'rgba(255,159,64,0.6)', borderDash: [3,3], borderWidth: 1, pointRadius: 0, fill: false },
-      ] : []),
-      ...((chartOptions.showControlLimits || chartOptions.showSigma3) ? [
-        { label: 'UCL', data: Array(subgroupMeans.length).fill(xbarLimits.ucl), borderColor: 'rgba(255,99,132,0.9)', borderDash: [5,5], borderWidth: 2, pointRadius: 0, fill: false },
-        { label: 'LCL', data: Array(subgroupMeans.length).fill(xbarLimits.lcl), borderColor: 'rgba(255,99,132,0.9)', borderDash: [5,5], borderWidth: 2, pointRadius: 0, fill: false },
-      ] : []),
-    ],
-  };
-
-  const sSigmaUp = (sChartLimits.ucl - sChartLimits.centerLine) / 3;
-  const sSigmaDown = (sChartLimits.centerLine - sChartLimits.lcl) / 3;
-  const sData = {
-    labels,
-    datasets: [
-      {
-        label: 'Subgroup Std Dev (S)',
-        data: subgroupStdDevs,
-        borderColor: 'rgba(153, 102, 255, 0.9)',
-        backgroundColor: subgroupStdDevs.map(v => {
-          if (!chartOptions.showRuleViolations) return 'rgba(153, 102, 255, 0.9)';
-          return (v > sChartLimits.ucl || v < sChartLimits.lcl) ? 'red' : 'rgba(153, 102, 255, 0.9)';
-        }),
-        pointBackgroundColor: subgroupStdDevs.map(v => {
-          if (!chartOptions.showRuleViolations) return 'rgba(153, 102, 255, 0.9)';
-          return (v > sChartLimits.ucl || v < sChartLimits.lcl) ? 'red' : 'rgba(153, 102, 255, 0.9)';
-        }),
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        tension: 0.1,
-      },
-      ...(chartOptions.showCenterLine ? [
-        {
-          label: 'Center Line (S̄)',
-          data: Array(subgroupStdDevs.length).fill(sChartLimits.centerLine),
-          borderColor: 'rgba(75, 192, 192, 0.9)',
-          borderDash: [6, 6],
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: false,
-        }
-      ] : []),
-      ...(chartOptions.showSigma1 ? [
-        { label: '+1σ', data: Array(subgroupStdDevs.length).fill(sChartLimits.centerLine + sSigmaUp), borderColor: 'rgba(255,205,86,0.6)', borderDash: [2,2], borderWidth: 1, pointRadius: 0, fill: false },
-        { label: '-1σ', data: Array(subgroupStdDevs.length).fill(sChartLimits.centerLine - sSigmaDown), borderColor: 'rgba(255,205,86,0.6)', borderDash: [2,2], borderWidth: 1, pointRadius: 0, fill: false },
-      ] : []),
-      ...(chartOptions.showSigma2 ? [
-        { label: '+2σ', data: Array(subgroupStdDevs.length).fill(sChartLimits.centerLine + 2*sSigmaUp), borderColor: 'rgba(255,159,64,0.6)', borderDash: [3,3], borderWidth: 1, pointRadius: 0, fill: false },
-        { label: '-2σ', data: Array(subgroupStdDevs.length).fill(sChartLimits.centerLine - 2*sSigmaDown), borderColor: 'rgba(255,159,64,0.6)', borderDash: [3,3], borderWidth: 1, pointRadius: 0, fill: false },
-      ] : []),
-      ...((chartOptions.showControlLimits || chartOptions.showSigma3) ? [
-        { label: 'UCL (S)', data: Array(subgroupStdDevs.length).fill(sChartLimits.ucl), borderColor: 'rgba(255,99,132,0.9)', borderDash: [5,5], borderWidth: 2, pointRadius: 0, fill: false },
-        { label: 'LCL (S)', data: Array(subgroupStdDevs.length).fill(sChartLimits.lcl), borderColor: 'rgba(255,99,132,0.9)', borderDash: [5,5], borderWidth: 2, pointRadius: 0, fill: false },
-      ] : []),
-    ],
-  };
-
-  const resetChart = (ref: React.MutableRefObject<any>) => {
-    const chart = ref.current;
-    if (!chart) return;
-    if (typeof chart.resetZoom === 'function') {
-      try { chart.resetZoom(); return; } catch { /* noop */ }
-    }
-    chart.options.scales = chart.options.scales || {};
-    if (chart.options.scales.x) { delete (chart.options.scales.x as any).min; delete (chart.options.scales.x as any).max; }
-    if (chart.options.scales.y) { delete (chart.options.scales.y as any).min; delete (chart.options.scales.y as any).max; }
-    chart.update('none');
-  };
-
-  const xbarOptions: ChartOptions<'line'> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: 'top',
-      },
-      title: {
-        display: true,
-        text: chartOptions.title || `X-bar Chart (n=${sampleSize})`,
-        font: {
-          size: 16,
-        }
-      },
-      tooltip: {
-        callbacks: {
-          label: (context) => {
-            const index = context.dataIndex;
-            const labels = [`${context.dataset.label}: ${context.parsed.y.toFixed(3)}`];
-            if (chartOptions.showRuleViolations && context.dataset.label?.toString().includes('X-bar')) {
-              const hit = violations.filter(v => v.index === index);
-              hit.forEach(v => labels.push(`Rule ${v.ruleNumber}: ${v.description}`));
-            }
-            return labels;
-          }
-        }
-      },
-      zoom: {
-        zoom: { wheel: { enabled: true, modifierKey: 'ctrl' }, pinch: { enabled: true }, mode: 'xy' },
-        pan: { enabled: true, mode: 'xy' },
-      }
-    },
-    scales: {
-      x: {
-        title: {
-          display: true,
-          text: chartOptions.xAxisLabel || 'Subgroup',
-        },
-      },
-      y: {
-        title: {
-          display: true,
-          text: chartOptions.yAxisLabel || 'Subgroup Mean (X̄)',
-        },
-      },
-    },
-  };
-
-  const sOptions: ChartOptions<'line'> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { position: 'top' },
-      title: {
-        display: true,
-        text: `S Chart (n=${sampleSize})`,
-        font: { size: 16 },
-      },
-      tooltip: {
-        callbacks: {
-          label: (context) => {
-            const index = context.dataIndex;
-            const labels = [`${context.dataset.label}: ${context.parsed.y.toFixed(3)}`];
-            if (chartOptions.showRuleViolations && context.dataset.label?.toString().includes('(S)')) {
-              const val = subgroupStdDevs[index];
-              if (val > sChartLimits.ucl) labels.push('Above UCL');
-              else if (val < sChartLimits.lcl) labels.push('Below LCL');
-            }
-            return labels;
-          }
-        }
-      },
-      zoom: {
-        zoom: { wheel: { enabled: true, modifierKey: 'ctrl' }, pinch: { enabled: true }, mode: 'xy' },
-        pan: { enabled: true, mode: 'xy' },
-      }
-    },
-    scales: {
-      x: { title: { display: true, text: chartOptions.xAxisLabel || 'Subgroup' } },
-      y: { title: { display: true, text: 'Subgroup Std Dev (S)' } },
-    },
-  };
+  const { controlLimits, ruleViolations, data } = processedData;
+  // Subgroup means from the shared calculation; the chart never regroups or drops rows itself.
+  const subgroupMeans = controlLimits.chartValues ?? [];
+  const multiColumn = selectedColumns.length > 1;
+  const subgroupSize = multiColumn ? selectedColumns.length : sampleSize;
+  const labelColumn = multiColumn ? xAxisColumn : null;
+  const xAxisTitle = chartOptions.xAxisLabel || 'Subgroup';
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2" style={{ height: '360px' }}>
-        <div className="flex gap-2 justify-end">
-          <button className="px-2 py-1 text-sm rounded bg-gray-100 hover:bg-gray-200 border" onClick={() => resetChart(xbarRef)}>Reset View</button>
-        </div>
-        <div className="h-[320px]">
-          <Line ref={xbarRef} data={xbarData} options={xbarOptions} />
-        </div>
-      </div>
-      <div className="space-y-2" style={{ height: '360px' }}>
-        <div className="flex gap-2 justify-end">
-          <button className="px-2 py-1 text-sm rounded bg-gray-100 hover:bg-gray-200 border" onClick={() => resetChart(sRef)}>Reset View</button>
-        </div>
-        <div className="h-[320px]">
-          <Line ref={sRef} data={sData} options={sOptions} />
-        </div>
-      </div>
+      <ControlChartView
+        title={chartOptions.title || `X-bar Chart (n=${subgroupSize})`}
+        xAxisTitle={xAxisTitle}
+        yAxisTitle={chartOptions.yAxisLabel || 'Subgroup Mean (X̄)'}
+        seriesLabel="Subgroup Mean (X-bar)"
+        labels={buildAxisLabels(data, labelColumn, subgroupMeans.length)}
+        values={subgroupMeans}
+        centerLine={controlLimits.centerLine}
+        ucl={controlLimits.ucl}
+        lcl={controlLimits.lcl}
+        sigma={controlLimits.sigma}
+        centerLabel="Center Line"
+        uclLabel="UCL"
+        lclLabel="LCL"
+        violations={ruleViolations}
+        color="rgba(54, 162, 235, 0.9)"
+      />
+      <VariationChartView
+        title={`S Chart (n=${subgroupSize})`}
+        xAxisTitle={xAxisTitle}
+        yAxisTitle="Subgroup Std Dev (S)"
+        seriesLabel="Subgroup Std Dev (S)"
+        centerLabel="Center Line (S̄)"
+        uclLabel="UCL (S)"
+        lclLabel="LCL (S)"
+        color="rgba(255, 159, 64, 0.9)"
+        labelColumn={labelColumn}
+      />
     </div>
   );
 };

@@ -315,7 +315,7 @@ const DataPreview: React.FC = () => {
     }
     if (dir === null) {
       // Reset to original raw order
-      setViewData(rawData.data.map(r => ({ ...r })));
+      if (rawData) setViewData(rawData.data.map(r => ({ ...r })));
       setSortState(null);
       return;
     }
@@ -359,20 +359,6 @@ const DataPreview: React.FC = () => {
       setRawData(updated);
     }
     setUnsavedChanges(false);
-  };
-
-  const insertRowBelow = () => {
-    if (!headers.length) return;
-    const emptyRow: Record<string, any> = {};
-    headers.forEach(h => (emptyRow[h] = ''));
-    let insertIndex = viewData.length;
-    if (selection) {
-      insertIndex = Math.max(selection.start.row, selection.end.row) + 1;
-    }
-    const newData = [...viewData];
-    newData.splice(insertIndex, 0, emptyRow);
-    setViewData(newData);
-    setUnsavedChanges(true);
   };
 
   // Context operations helpers
@@ -434,7 +420,7 @@ const DataPreview: React.FC = () => {
     newHeaders.splice(colIndex + 1, 0, newHeader);
     const newData = viewData.map((row) => ({ ...row, [newHeader]: '' }));
     const newWidths = [...columnWidths];
-    newWidths.splice(colIndex + 1, 0, getInitialColumnWidth(newHeaders.length));
+    newWidths.splice(colIndex + 1, 0, getInitialColumnWidth());
     setHeaders(newHeaders);
     setViewData(newData);
     setColumnWidths(newWidths);
@@ -450,7 +436,7 @@ const DataPreview: React.FC = () => {
       const h = uniqueHeaderName('New Column');
       added.push(h);
       newHeaders.splice(colIndex + 1 + i, 0, h);
-      newWidths.splice(colIndex + 1 + i, 0, getInitialColumnWidth(newHeaders.length));
+      newWidths.splice(colIndex + 1 + i, 0, getInitialColumnWidth());
     }
     const newData = viewData.map((row) => {
       const r: Record<string, any> = { ...row };
@@ -537,7 +523,7 @@ const DataPreview: React.FC = () => {
     clipboard.columns.forEach((col, idx) => {
       const name = clipboard.cut ? col.header : uniqueHeaderName(col.header);
       newHeaders.splice(colIndex + 1 + idx, 0, name);
-      newWidths.splice(colIndex + 1 + idx, 0, getInitialColumnWidth(newHeaders.length));
+      newWidths.splice(colIndex + 1 + idx, 0, getInitialColumnWidth());
       addedNames.push(name);
     });
     const newData = viewData.map((row, rowIndex) => {
@@ -575,16 +561,6 @@ const DataPreview: React.FC = () => {
     setViewData(newData);
     setUnsavedChanges(true);
     if (clipboard.cut) setClipboard(null);
-  };
-
-  const deleteSelectedRows = () => {
-    if (!selection) return;
-    const startRow = Math.min(selection.start.row, selection.end.row);
-    const endRow = Math.max(selection.start.row, selection.end.row);
-    const newData = viewData.filter((_, idx) => idx < startRow || idx > endRow);
-    setViewData(newData);
-    setSelection(null);
-    setUnsavedChanges(true);
   };
 
   const removeFirstRow = () => {
@@ -922,19 +898,19 @@ const DataPreview: React.FC = () => {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 mb-2 p-2 bg-gray-50 rounded-md border border-gray-200">
         <div className="flex items-center gap-1">
-          <button onClick={handleCopy} className="p-1 hover:bg-gray-200 rounded" title={t('dataPreview.copy')}>
+          <button onClick={handleCopy} className="p-1 hover:bg-gray-200 rounded-sm" title={t('dataPreview.copy')}>
             <Copy size={16} />
           </button>
-          <button onClick={handlePaste} className="p-1 hover:bg-gray-200 rounded" title={t('dataPreview.paste')}>
+          <button onClick={handlePaste} className="p-1 hover:bg-gray-200 rounded-sm" title={t('dataPreview.paste')}>
             <Clipboard size={16} />
           </button>
-          <button onClick={exportSelection} disabled={!selection} className="p-1 hover:bg-gray-200 rounded disabled:opacity-40" title={t('dataPreview.export')}>
+          <button onClick={exportSelection} disabled={!selection} className="p-1 hover:bg-gray-200 rounded-sm disabled:opacity-40" title={t('dataPreview.export')}>
             <Download size={16} />
           </button>
           <button
             onClick={removeFirstRow}
             disabled={viewData.length === 0}
-            className="p-1 hover:bg-gray-200 rounded disabled:opacity-40"
+            className="p-1 hover:bg-gray-200 rounded-sm disabled:opacity-40"
             title={t('dataPreview.removeFirstRow')}
           >
             <Trash2 size={16} />
@@ -942,7 +918,7 @@ const DataPreview: React.FC = () => {
           <button
             onClick={useFirstRowAsHeaders}
             disabled={viewData.length === 0 || headers.length === 0}
-            className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-40"
+            className="px-2 py-1 text-xs border border-gray-300 rounded-sm hover:bg-gray-100 disabled:opacity-40"
             title={t('dataPreview.useFirstRowAsHeaders')}
           >
             {t('dataPreview.useFirstRowAsHeaders')}
@@ -952,19 +928,19 @@ const DataPreview: React.FC = () => {
         <div className="flex items-center gap-3 ml-auto text-xs">
           {selectedColumns?.length > 0 && (
             <div className="flex items-center gap-2 mr-2">
-              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">Y: {Array.isArray(selectedColumns) ? (selectedColumns.join(', ')) : selectedColumns}</span>
-              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">X: {xAxisColumn || 'Index'}</span>
+              <span className="px-1.5 py-0.5 rounded-sm bg-emerald-100 text-emerald-800 border border-emerald-300">Y: {Array.isArray(selectedColumns) ? (selectedColumns.join(', ')) : selectedColumns}</span>
+              <span className="px-1.5 py-0.5 rounded-sm bg-amber-100 text-amber-800 border border-amber-300">X: {xAxisColumn || 'Index'}</span>
             </div>
           )}
           {(selectedChartType === 'xBarS' || selectedChartType === 'xBarR') && (
-            <div className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+            <div className="px-2 py-0.5 rounded-sm bg-blue-50 text-blue-700 border border-blue-200">
               X-bar mode: selected Y columns {(selectedColumns || []).length}
             </div>
           )}
         </div>
         <div className="flex items-center gap-2 ml-2">
           {unsavedChanges && <span className="text-xs text-amber-600">{t('dataPreview.unsaved')}</span>}
-          <button onClick={commitChanges} disabled={!unsavedChanges} className="px-2 py-1 text-xs bg-blue-600 text-white rounded disabled:opacity-40 flex items-center gap-1" title={t('dataPreview.apply')}>
+          <button onClick={commitChanges} disabled={!unsavedChanges} className="px-2 py-1 text-xs bg-blue-600 text-white rounded-sm disabled:opacity-40 flex items-center gap-1" title={t('dataPreview.apply')}>
             <Check size={14} /> {t('dataPreview.apply')}
           </button>
         </div>
@@ -978,7 +954,7 @@ const DataPreview: React.FC = () => {
         <input
           value={formulaValue}
           onChange={(e) => handleFormulaChange(e.target.value)}
-          className="flex-1 border border-l-0 border-gray-300 rounded-r px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="flex-1 border border-l-0 border-gray-300 rounded-r px-2 py-1 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
           placeholder="Cell value"
         />
       </div>
@@ -1034,7 +1010,7 @@ const DataPreview: React.FC = () => {
                 >
                     {editingHeader === colIndex ? (
                       <input
-                        className="w-full text-xs border border-blue-300 rounded px-1 py-0.5 focus:outline-none"
+                        className="w-full text-xs border border-blue-300 rounded-sm px-1 py-0.5 focus:outline-hidden"
                         autoFocus
                         defaultValue={header}
                         onBlur={(e) => commitHeaderEdit(colIndex, e.target.value.trim())}
@@ -1056,7 +1032,7 @@ const DataPreview: React.FC = () => {
                     {/* X/Y selectors */}
                     <div className="mt-1 flex items-center justify-center gap-1">
                       <button
-                        className={`px-1 py-0.5 rounded text-[10px] border ${isY ? 'bg-emerald-200 border-emerald-400 text-emerald-900' : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'}`}
+                        className={`px-1 py-0.5 rounded-sm text-[10px] border ${isY ? 'bg-emerald-200 border-emerald-400 text-emerald-900' : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'}`}
                         title={'Use as Y (values)'}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1076,7 +1052,7 @@ const DataPreview: React.FC = () => {
                         Y
                       </button>
                       <button
-                        className={`px-1 py-0.5 rounded text-[10px] border ${isX ? 'bg-amber-200 border-amber-400 text-amber-900' : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'} ${selectedChartType === 'xBarS' || selectedChartType === 'xBarR' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        className={`px-1 py-0.5 rounded-sm text-[10px] border ${isX ? 'bg-amber-200 border-amber-400 text-amber-900' : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'} ${selectedChartType === 'xBarS' || selectedChartType === 'xBarR' ? 'opacity-50 cursor-not-allowed' : ''}`}
                         title={selectedChartType === 'xBarS' || selectedChartType === 'xBarR' ? 'X-axis selection disabled for X-bar charts' : 'Use as X (axis)'}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1143,7 +1119,7 @@ const DataPreview: React.FC = () => {
                       {editingCell?.row === rowIndex && editingCell?.col === colIndex ? (
                         <input
                           type="text"
-                          className="w-full h-full p-0 text-xs border border-blue-300 focus:outline-none bg-white"
+                          className="w-full h-full p-0 text-xs border border-blue-300 focus:outline-hidden bg-white"
                           value={value}
                           onChange={(e) => handleCellEdit(rowIndex, colIndex, e.target.value)}
                           autoFocus
@@ -1166,7 +1142,7 @@ const DataPreview: React.FC = () => {
                           )}
                           {showSelectionHandle && (
                             <span
-                              className={`absolute -bottom-0.5 h-2.5 w-2.5 bg-green-500 border border-white rounded-sm opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none ${isRtl ? '-left-0.5' : '-right-0.5'}`}
+                              className={`absolute -bottom-0.5 h-2.5 w-2.5 bg-green-500 border border-white rounded-xs opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none ${isRtl ? '-left-0.5' : '-right-0.5'}`}
                               title="Multi-selection handle"
                             />
                           )}
@@ -1184,7 +1160,7 @@ const DataPreview: React.FC = () => {
       {/* Context Menu */}
       {contextMenu.visible && (
         <div
-          className="fixed z-50 bg-white border border-gray-200 rounded shadow-lg text-sm"
+          className="fixed z-50 bg-white border border-gray-200 rounded-sm shadow-lg text-sm"
           style={{ top: contextMenu.y + 2, left: contextMenu.x + 2, minWidth: 180 }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -1218,7 +1194,7 @@ const DataPreview: React.FC = () => {
                   setContextMenu({ ...contextMenu, visible: false });
                 }}>Delete Row</button>
               </li>
-              <li className="border-t my-1" />
+              <li className="border-t border-gray-200 my-1" />
               <li>
                 <button className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { if (contextMenu.row !== undefined) copyRowAt(contextMenu.row, false); setContextMenu({ ...contextMenu, visible: false }); }}>Copy Row</button>
               </li>
@@ -1262,7 +1238,7 @@ const DataPreview: React.FC = () => {
                   setContextMenu({ ...contextMenu, visible: false });
                 }}>Delete Column</button>
               </li>
-              <li className="border-t my-1" />
+              <li className="border-t border-gray-200 my-1" />
               <li>
                 <button className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { if (contextMenu.col !== undefined) copyColumnAt(contextMenu.col, false); setContextMenu({ ...contextMenu, visible: false }); }}>Copy Column</button>
               </li>
@@ -1293,7 +1269,7 @@ const DataPreview: React.FC = () => {
                     <span className="text-xs text-gray-500">▶</span>
                   </button>
                   {spcSubmenuOpen && (
-                    <div className="absolute top-0 left-full ml-1 bg-white border border-gray-200 rounded shadow-lg min-w-[180px] z-10">
+                    <div className="absolute top-0 left-full ml-1 bg-white border border-gray-200 rounded-sm shadow-lg min-w-[180px] z-10">
                       <button
                         className="w-full text-left px-3 py-1.5 hover:bg-gray-100"
                         onClick={performSpcOnSelected}
@@ -1304,7 +1280,7 @@ const DataPreview: React.FC = () => {
                   )}
                 </li>
               )}
-              {hasMultiCellSelection() && <li className="border-t my-1" />}
+              {hasMultiCellSelection() && <li className="border-t border-gray-200 my-1" />}
               <li>
                 <button className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { if (contextMenu.row !== undefined && contextMenu.col !== undefined) copyCellAt(contextMenu.row, contextMenu.col, false); setContextMenu({ ...contextMenu, visible: false }); }}>Copy Cell</button>
               </li>
@@ -1324,7 +1300,7 @@ const DataPreview: React.FC = () => {
         {rawData.sheets ? rawData.sheets.map((s, idx) => {
           const isActive = idx === activeSheet;
           return (
-            <div key={s.name + idx} className={`flex items-center pl-2 pr-1 py-1 rounded border cursor-pointer group ${isActive ? 'bg-blue-100 border-blue-300 text-blue-800' : 'bg-white hover:bg-gray-100 border-gray-300'}`}
+            <div key={s.name + idx} className={`flex items-center pl-2 pr-1 py-1 rounded-sm border cursor-pointer group ${isActive ? 'bg-blue-100 border-blue-300 text-blue-800' : 'bg-white hover:bg-gray-100 border-gray-300'}`}
               onClick={() => {
                 if (unsavedChanges && !confirm('You have unsaved changes on this sheet. Switch anyway?')) return;
                 // Commit local changes to current sheet before switching (optional). We discard if unsaved and user confirmed.
@@ -1347,13 +1323,13 @@ const DataPreview: React.FC = () => {
             </div>
           );
         }) : (
-          <div className="px-3 py-1 rounded border bg-blue-100 border-blue-300 text-blue-800">Sheet1</div>
+          <div className="px-3 py-1 rounded-sm border bg-blue-100 border-blue-300 text-blue-800">Sheet1</div>
         )}
-        <button className="ml-1 px-2 py-1 border border-dashed rounded hover:bg-gray-50" onClick={() => addSheet()}>+ Sheet</button>
+        <button className="ml-1 px-2 py-1 border border-dashed border-gray-200 rounded-sm hover:bg-gray-50" onClick={() => addSheet()}>+ Sheet</button>
         {rawData.sheets && rawData.sheets.length > 1 && (
           <div className="flex items-center gap-1 ml-2">
-            <button className="px-2 py-1 border rounded hover:bg-gray-50" disabled={activeSheet === 0} onClick={() => moveSheet(activeSheet, Math.max(0, activeSheet - 1))}>{'<'}</button>
-            <button className="px-2 py-1 border rounded hover:bg-gray-50" disabled={activeSheet === (rawData.sheets.length - 1)} onClick={() => moveSheet(activeSheet, Math.min(rawData.sheets!.length - 1, activeSheet + 1))}>{'>'}</button>
+            <button className="px-2 py-1 border border-gray-200 rounded-sm hover:bg-gray-50" disabled={activeSheet === 0} onClick={() => moveSheet(activeSheet, Math.max(0, activeSheet - 1))}>{'<'}</button>
+            <button className="px-2 py-1 border border-gray-200 rounded-sm hover:bg-gray-50" disabled={activeSheet === (rawData.sheets.length - 1)} onClick={() => moveSheet(activeSheet, Math.min(rawData.sheets!.length - 1, activeSheet + 1))}>{'>'}</button>
           </div>
         )}
         <span className="ml-auto italic">Rows: {viewData.length} | Columns: {headers.length}</span>

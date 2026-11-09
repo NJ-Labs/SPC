@@ -1,13 +1,14 @@
-FROM node:20-alpine AS web-build
+FROM node:24-alpine AS web-build
 WORKDIR /workspace
 
-COPY package.json pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
+COPY package.json package-lock.json ./
+COPY vendor ./vendor
+RUN npm ci
 
 COPY . .
 
 ENV NODE_ENV=production
-RUN pnpm build
+RUN npm run build
 
 FROM ghcr.io/astral-sh/uv:0.7.3 AS uv
 
@@ -50,7 +51,8 @@ RUN set -eux; \
       if [ -n "${PIP_TRUSTED_HOST:-}" ]; then export UV_INSECURE_HOST="$PIP_TRUSTED_HOST"; fi; \
       uv sync --frozen --no-dev --no-install-project
 
-COPY services/dspy-gateway/main.py ./main.py
+COPY services/dspy-gateway/main.py services/dspy-gateway/spc_visuals.py services/dspy-gateway/env_config.py ./
+COPY docs/knowledge ./knowledge
 COPY --from=web-build /workspace/dist ./spc-web-dist
 
 RUN useradd --create-home --uid 10001 spc \

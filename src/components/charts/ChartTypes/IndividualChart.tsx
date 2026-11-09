@@ -1,298 +1,51 @@
-import React, { useRef } from 'react';
-import { Line } from 'react-chartjs-2';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  ChartOptions,
-} from 'chart.js';
-import annotationPlugin from 'chartjs-plugin-annotation';
-import zoomPlugin from 'chartjs-plugin-zoom';
+import React from 'react';
 import { useAppContext } from '../../../context/AppContext';
-import { getControlChartConstants } from '../../../utils/spcCalculations';
-
-// Register ChartJS components
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  annotationPlugin,
-  zoomPlugin
-);
-
-type ScaleWithMinMax = { min?: number; max?: number };
+import ControlChartView from '../ControlChartView';
+import VariationChartView from '../VariationChartView';
+import { buildAxisLabels } from '../chartSeries';
 
 const IndividualChart: React.FC = () => {
-  const { processedData, selectedColumns, chartOptions, xAxisColumn: xColumn } = useAppContext();
-  const iChartRef = useRef<ChartJS<'line'> | null>(null);
-  const mrChartRef = useRef<ChartJS<'line'> | null>(null);
+  const { processedData, selectedColumns, chartOptions, xAxisColumn } = useAppContext();
 
   if (!processedData || !selectedColumns.length) {
     return <div>No data available</div>;
   }
 
-  const selectedColumn = selectedColumns[0];
-  const data = processedData.data;
-  const { ucl, lcl, centerLine, sigma } = processedData.controlLimits;
-  const { ruleViolations } = processedData;
-
-  // Labels for I chart (index or chosen X column)
-  const labels = xColumn
-    ? data.map((row) => String(row[xColumn] ?? ''))
-    : data.map((_, index) => `${index + 1}`);
-
-  const values = data.map(row => parseFloat(row[selectedColumn]));
-
-  const defaultPointColor = 'rgba(54, 162, 235, 0.8)';
-  const pointBackgroundColors = values.map((_, index) => {
-    if (!chartOptions.showRuleViolations) return defaultPointColor;
-    const hasViolation = ruleViolations.some(v => v.index === index);
-    return hasViolation ? 'red' : defaultPointColor;
-  });
-
-  const iData = {
-    labels,
-    datasets: [
-      {
-        label: selectedColumn,
-        data: values,
-        borderColor: 'rgba(54, 162, 235, 0.8)',
-        backgroundColor: pointBackgroundColors,
-        pointRadius: 4,
-        pointHoverRadius: 6,
-        tension: 0.1,
-      },
-      ...(chartOptions.showCenterLine ? [
-        {
-          label: 'Center Line',
-          data: Array(values.length).fill(centerLine),
-          borderColor: 'rgba(75, 192, 192, 0.8)',
-          borderDash: [6, 6],
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: false,
-        }
-      ] : []),
-      ...(chartOptions.showSigma1 ? [
-        {
-          label: '+1σ',
-          data: Array(values.length).fill(centerLine + sigma),
-          borderColor: 'rgba(255, 205, 86, 0.6)',
-          borderDash: [2, 2],
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: false,
-        },
-        {
-          label: '-1σ',
-          data: Array(values.length).fill(centerLine - sigma),
-          borderColor: 'rgba(255, 205, 86, 0.6)',
-          borderDash: [2, 2],
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: false,
-        },
-      ] : []),
-      ...(chartOptions.showSigma2 ? [
-        {
-          label: '+2σ',
-          data: Array(values.length).fill(centerLine + 2 * sigma),
-          borderColor: 'rgba(255, 159, 64, 0.6)',
-          borderDash: [3, 3],
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: false,
-        },
-        {
-          label: '-2σ',
-          data: Array(values.length).fill(centerLine - 2 * sigma),
-          borderColor: 'rgba(255, 159, 64, 0.6)',
-          borderDash: [3, 3],
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: false,
-        },
-      ] : []),
-      ...((chartOptions.showControlLimits || chartOptions.showSigma3) ? [
-        {
-          label: '+3σ (UCL)',
-          data: Array(values.length).fill(ucl),
-          borderColor: 'rgba(255, 99, 132, 0.9)',
-          borderDash: [5, 5],
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: false,
-        },
-        {
-          label: '-3σ (LCL)',
-          data: Array(values.length).fill(lcl),
-          borderColor: 'rgba(255, 99, 132, 0.9)',
-          borderDash: [5, 5],
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: false,
-        }
-      ] : []),
-    ],
-  };
-
-  const resetChart = (chartRef: React.MutableRefObject<ChartJS<'line'> | null>) => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    if (typeof chart.resetZoom === 'function') {
-      try { chart.resetZoom(); return; } catch { /* noop */ }
-    }
-    chart.options.scales = chart.options.scales || {};
-    if (chart.options.scales.x) {
-      const sx = chart.options.scales.x as unknown as ScaleWithMinMax;
-      delete sx.min;
-      delete sx.max;
-    }
-    if (chart.options.scales.y) {
-      const sy = chart.options.scales.y as unknown as ScaleWithMinMax;
-      delete sy.min;
-      delete sy.max;
-    }
-    chart.update('none');
-  };
-
-  const iOptions: ChartOptions<'line'> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { position: 'top' },
-      title: { display: true, text: chartOptions.title || 'Individuals (I) Chart', font: { size: 16 } },
-      tooltip: {
-        callbacks: {
-          label: (context) => {
-            const index = context.dataIndex;
-            const hasViolation = chartOptions.showRuleViolations && ruleViolations.some(v => v.index === index);
-            const labels = [`${context.dataset.label}: ${context.parsed.y.toFixed(2)}`];
-            if (hasViolation) {
-              const violations = ruleViolations.filter(v => v.index === index);
-              violations.forEach(v => labels.push(`Rule ${v.ruleNumber} violation: ${v.description}`));
-            }
-            return labels;
-          }
-        }
-      },
-      zoom: {
-        zoom: {
-          wheel: { enabled: true, modifierKey: 'ctrl' },
-          pinch: { enabled: true },
-          mode: 'xy'
-        },
-        pan: { enabled: true, mode: 'xy' }
-      }
-    },
-    scales: {
-      x: { title: { display: true, text: chartOptions.xAxisLabel || 'Sample' } },
-      y: { title: { display: true, text: chartOptions.yAxisLabel || 'Value' } },
-    },
-  };
-
-  // Moving Range (mR) chart (lag 2)
-  const mrValues = values.slice(1).map((v, i) => Math.abs(v - values[i]));
-  const mrLabels = labels.slice(1); // align with second point in each pair
-  const mrBar = mrValues.length ? mrValues.reduce((a, b) => a + b, 0) / mrValues.length : 0;
-  const constants = getControlChartConstants(2);
-  const mrUCL = constants.d4 * mrBar;
-  const mrLCL = Math.max(0, constants.d3 * mrBar);
-
-  const mrData = {
-    labels: mrLabels,
-    datasets: [
-      {
-        label: 'Moving Range (mR)',
-        data: mrValues,
-        borderColor: 'rgba(153, 102, 255, 0.9)',
-        backgroundColor: 'rgba(153, 102, 255, 0.9)',
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        tension: 0.1,
-      },
-      ...(chartOptions.showCenterLine ? [
-        {
-          label: 'Center Line (MR̄)',
-          data: Array(mrValues.length).fill(mrBar),
-          borderColor: 'rgba(75, 192, 192, 0.9)',
-          borderDash: [6, 6],
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: false,
-        }
-      ] : []),
-      ...(chartOptions.showControlLimits ? [
-        {
-          label: 'UCL (mR)',
-          data: Array(mrValues.length).fill(mrUCL),
-          borderColor: 'rgba(255, 99, 132, 0.9)',
-          borderDash: [5, 5],
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: false,
-        },
-        {
-          label: 'LCL (mR)',
-          data: Array(mrValues.length).fill(mrLCL),
-          borderColor: 'rgba(255, 99, 132, 0.9)',
-          borderDash: [5, 5],
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: false,
-        }
-      ] : []),
-    ],
-  };
-
-  const mrOptions: ChartOptions<'line'> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { position: 'top' },
-      title: { display: true, text: 'Moving Range (mR) Chart', font: { size: 16 } },
-      zoom: {
-        zoom: {
-          wheel: { enabled: true, modifierKey: 'ctrl' },
-          pinch: { enabled: true },
-          mode: 'xy'
-        },
-        pan: { enabled: true, mode: 'xy' }
-      }
-    },
-    scales: {
-      x: { title: { display: true, text: chartOptions.xAxisLabel || 'Sample' } },
-      y: { title: { display: true, text: 'Moving Range' } },
-    },
-  };
+  const { controlLimits, ruleViolations, data } = processedData;
+  const values = controlLimits.chartValues ?? [];
+  const labels = buildAxisLabels(data, xAxisColumn, values.length);
+  const xAxisTitle = chartOptions.xAxisLabel || 'Sample';
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2" style={{ height: '360px' }}>
-        <div className="flex gap-2 justify-end">
-          <button className="px-2 py-1 text-sm rounded bg-gray-100 hover:bg-gray-200 border" onClick={() => resetChart(iChartRef)}>Reset View</button>
-        </div>
-        <div className="h-[320px]">
-          <Line ref={iChartRef} data={iData} options={iOptions} />
-        </div>
-      </div>
-      <div className="space-y-2" style={{ height: '360px' }}>
-        <div className="flex gap-2 justify-end">
-          <button className="px-2 py-1 text-sm rounded bg-gray-100 hover:bg-gray-200 border" onClick={() => resetChart(mrChartRef)}>Reset View</button>
-        </div>
-        <div className="h-[320px]">
-          <Line ref={mrChartRef} data={mrData} options={mrOptions} />
-        </div>
-      </div>
+      <ControlChartView
+        title={chartOptions.title || 'Individuals (I) Chart'}
+        xAxisTitle={xAxisTitle}
+        yAxisTitle={chartOptions.yAxisLabel || 'Value'}
+        seriesLabel={selectedColumns[0]}
+        labels={labels}
+        values={values}
+        centerLine={controlLimits.centerLine}
+        ucl={controlLimits.ucl}
+        lcl={controlLimits.lcl}
+        sigma={controlLimits.sigma}
+        centerLabel="Center Line"
+        uclLabel="+3σ (UCL)"
+        lclLabel="-3σ (LCL)"
+        violations={ruleViolations}
+        decimals={2}
+      />
+      <VariationChartView
+        title="Moving Range (mR) Chart"
+        xAxisTitle={xAxisTitle}
+        yAxisTitle="Moving Range"
+        seriesLabel="Moving Range (mR)"
+        centerLabel="Center Line (MR̄)"
+        uclLabel="UCL (mR)"
+        lclLabel="LCL (mR)"
+        color="rgba(153, 102, 255, 0.9)"
+        labelColumn={xAxisColumn}
+      />
     </div>
   );
 };
